@@ -264,23 +264,46 @@ prepend-rules:
 
 比自动化 App 靠谱的关键原因：**Termux 自带真正的 `curl`，TLS 完整，`pinned` 模式能用**，证书问题一次性解决；而且直接复用同一个 `po0fw.sh`，不用维护第二套逻辑。
 
+#### 第 0 步：装 Termux
+
+**从 F-Droid 装，不要用 Play 商店版**（那个已停更多年，`pkg` 装不了东西）。两个都要，`termux-job-scheduler` 在后一个包里：
+
+- Termux：<https://f-droid.org/packages/com.termux/>
+- Termux:API：<https://f-droid.org/packages/com.termux.api/>
+
+#### 第 1 步：装 + 配 + 验证（一段粘贴）
+
+**先关掉 WiFi 切到移动数据再跑**，这样才能看到蜂窝的出口 IP。把两处 `pgnfw_你的第N个` 换成真 token，整段粘进 Termux：
+
 ```sh
-# 1. 从 F-Droid 装 Termux 和 Termux:API（不要用 Play 商店版，已停更多年）
-#    https://f-droid.org/packages/com.termux/
-#    https://f-droid.org/packages/com.termux.api/
-
-# 2. 在 Termux 里
-pkg update && pkg install curl termux-api
-
-curl -fsSL -o ~/po0fw.sh   https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.sh
-curl -fsSL -o ~/po0fw.conf https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.conf.example
+pkg update -y && pkg install -y curl termux-api
+curl -fsSL -o ~/po0fw.sh https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.sh
 chmod +x ~/po0fw.sh
-nano ~/po0fw.conf          # PO0FW_TOKENS 不加 @槽位
-
-# 3. 手动跑通
+cat > ~/po0fw.conf <<'EOF'
+PO0FW_TOKENS="pgnfw_你的第一个|pgnfw_你的第二个"
+PO0FW_TLS="strict"
+EOF
+chmod 600 ~/po0fw.conf
 ~/po0fw.sh -v
+```
 
-# 4. 交给系统调度（--persisted 开机自启，--network any 要求有网才跑）
+手机是会移动的设备，**`PO0FW_TOKENS` 不要加 `@槽位`**——理由见上面的「槽位策略」。`chmod 600` 是因为这个文件里有 token。
+
+#### 第 2 步：肉眼确认出口 IP ⚠️
+
+**这一步不能自动化。** 漏了 FlClash 的 DIRECT 规则时脚本照样报 ✅，只是上报的是代理的 IP——故障完全静默。
+
+| 输出的出口 IP | 含义 |
+|---|---|
+| 运营商蜂窝段 | ✅ 对了，继续 |
+| 家里宽带的段 | ❌ WiFi 没关干净 |
+| 代理服务器所在的段 | ❌ DIRECT 规则没生效，回第一节 |
+
+#### 第 3 步：交给系统调度
+
+确认第 2 步无误后再跑（`--persisted` 开机自启，`--network any` 要求有网才跑）：
+
+```sh
 termux-job-scheduler --script ~/po0fw.sh --period-ms 900000 --persisted true --network any
 ```
 
