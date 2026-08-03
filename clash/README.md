@@ -276,7 +276,7 @@ prepend-rules:
 **先关掉 WiFi 切到移动数据再跑**，这样才能看到蜂窝的出口 IP。把两处 `pgnfw_你的第N个` 换成真 token，整段粘进 Termux：
 
 ```sh
-pkg update -y && pkg install -y curl termux-api
+pkg update -y && pkg upgrade -y && pkg install -y curl termux-api
 curl -fsSL -o ~/po0fw.sh https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.sh
 chmod +x ~/po0fw.sh
 cat > ~/po0fw.conf <<'EOF'
@@ -288,6 +288,11 @@ chmod 600 ~/po0fw.conf
 ```
 
 手机是会移动的设备，**`PO0FW_TOKENS` 不要加 `@槽位`**——理由见上面的「槽位策略」。`chmod 600` 是因为这个文件里有 token。
+
+> **`pkg upgrade` 这步不能省。** Termux 的 `pkg update` 只刷新软件源索引、**不升级已装的包**。只跑 `update` 就 `install curl` 会装上最新 curl 却留着旧 openssl，启动时报
+> `CANNOT LINK EXECUTABLE "curl": cannot locate symbol "SSL_set_quic_tls_transport_params"`，
+> 然后后面每一步都跟着 `No such file or directory`（因为脚本压根没下下来）。
+> 已经踩了的话跑 `pkg upgrade -y` 修复即可——它走 apt，不依赖 curl。
 
 #### 第 2 步：肉眼确认出口 IP ⚠️
 
@@ -368,4 +373,6 @@ Get-Content C:\ProgramData\po0fw\po0fw.log -Tail 20 -Wait
 | Windows：任务不跑 | `Get-ScheduledTask -TaskName 'po0fw-whitelist'` 看是否注册且 `State` 为 `Ready`；`Get-ScheduledTaskInfo` 看 `LastRunTime` |
 | Windows：`irm` 下载报错 | 公司网络或代理拦截，换浏览器手动下载这三个文件到 `C:\po0fw\` |
 | macOS：launchd 不跑 | `launchctl print gui/$(id -u)/com.po0fw.whitelist` 看是否注册；`/tmp/po0fw.err.log` 看有没有报错 |
+| Android：`CANNOT LINK EXECUTABLE "curl"` / `cannot locate symbol` | Termux 包版本不一致（只跑了 `pkg update` 没跑 `pkg upgrade`）。`pkg upgrade -y` 修复；仍不行再 `pkg install -y --reinstall openssl libngtcp2 curl` |
+| Android：`chmod: cannot access ~/po0fw.sh` / `No such file` | 上一条的连带——curl 坏了导致脚本没下下来。先修 curl 再重跑下载 |
 | Android：Termux 任务不跑 | `termux-job-scheduler -p` 看任务在不在；确认已给 Termux 关掉电池优化 |
