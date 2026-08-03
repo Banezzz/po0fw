@@ -24,6 +24,13 @@
  *     · 本机 IP 已占用**别的**槽位 → 403 冲突，需先去 UI 删旧槽位（脚本会报 ❌）。
  * - 蜂窝（主接口 pdp_ip*）写入的 IP 仅做 📶 标记，便于面板识别。
  *
+ * 健壮性（针对 network-changed 场景，切网瞬间隧道会重建并掐断在途连接）：
+ * - 每次请求都带 JS 层硬超时，客户端回调不来时也能自行了结；
+ * - 传输失败按退避重试，第一发被切网掐断后仍有机会补上；
+ * - 每个 token 独立成败，一个卡住不影响另一个的结果上报；
+ * - 全链路兜底 catch + watchdog，保证任何路径下都会调用 $done，
+ *   绝不静默吊死到被客户端 timeout 杀掉（那样没有任何提示，最难排查）。
+ *
  * token 来源（优先级从高到低）：
  * 1. argument: tokens=<pgnfw_xxx>[@槽位],<pgnfw_yyy>（Surge/Loon/Stash 模块参数）
  * 2. 持久化存储 key "po0fw_tokens"（Quantumult X 等不支持参数的客户端，
@@ -38,48 +45,98 @@ var STORE_PREFIX = "po0_fw_";
 var TOKENS_KEY = "po0fw_tokens";
 var HIST_WINDOW_MS = 24 * 3600 * 1000; // 📶 标记的记账窗口
 
+// 时序预算，需装进载体里的 timeout=60：
+// 稳定等待 2s + 3 次尝试 × 12s + 退避 2s、4s = 最坏 44s，watchdog 50s 收尾。
+// 调大任何一项时记得同步检查这个总和仍小于 WATCHDOG_MS。
+var SETTLE_DELAY_MS = 2000; // 事件触发后先让接口稳定，避免第一发就撞上隧道重建
+var REQ_TIMEOUT_MS = 12000; // 单次请求的 JS 层硬超时
+var MAX_ATTEMPTS = 3; // 含首次，传输失败最多试这么多次
+var RETRY_BASE_MS = 2000; // 第 n 次失败后等 n × 该值
+var WATCHDOG_MS = 50000; // 最后兜底，必须小于载体的 timeout
+
 /* ---------- 环境兼容层 ---------- */
 
 var isQX = typeof $task !== "undefined";
 var isSurgeLike = typeof $httpClient !== "undefined"; // Surge/Stash/Shadowrocket/Loon
+var hasTimer = typeof setTimeout === "function";
 
 function storeRead(key) {
-  if (isQX) return $prefs.valueForKey(key);
-  if (typeof $persistentStore !== "undefined") return $persistentStore.read(key);
+  try {
+    if (isQX) return $prefs.valueForKey(key);
+    if (typeof $persistentStore !== "undefined") return $persistentStore.read(key);
+  } catch (e) {}
   return null;
 }
 
 function storeWrite(value, key) {
-  if (isQX) return $prefs.setValueForKey(value, key);
-  if (typeof $persistentStore !== "undefined") return $persistentStore.write(value, key);
+  try {
+    if (isQX) return $prefs.setValueForKey(value, key);
+    if (typeof $persistentStore !== "undefined") return $persistentStore.write(value, key);
+  } catch (e) {}
   return false;
 }
 
 function notify(title, subtitle, body) {
-  if (isQX) $notify(title, subtitle, body);
-  else if (typeof $notification !== "undefined") $notification.post(title, subtitle, body);
+  try {
+    if (isQX) $notify(title, subtitle, body);
+    else if (typeof $notification !== "undefined") $notification.post(title, subtitle, body);
+  } catch (e) {}
 }
 
+function delay(ms) {
+  return new Promise(function (resolve) {
+    if (hasTimer && ms > 0) setTimeout(resolve, ms);
+    else resolve();
+  });
+}
+
+// 单次请求：客户端回调与 JS 层硬超时双保险，且保证只 settle 一次。
+// 永远 resolve、从不 reject——失败信息放在 .error 里，让调用方自己决定重试。
 function httpRequest(method, opts) {
   return new Promise(function (resolve) {
-    if (isQX) {
-      opts.method = method;
-      $task.fetch(opts).then(
-        function (resp) {
-          resolve({ body: resp.body, status: resp.statusCode });
-        },
-        function (err) {
-          resolve({ error: String((err && err.error) || err) });
-        }
-      );
-    } else if (isSurgeLike) {
-      var fn = method === "POST" ? $httpClient.post : $httpClient.get;
-      fn(opts, function (error, response, body) {
-        if (error) resolve({ error: String(error) });
-        else resolve({ body: body, status: response && (response.status || response.statusCode) });
-      });
-    } else {
-      resolve({ error: "unsupported client" });
+    var settled = false;
+    var timer = null;
+
+    function done(r) {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      resolve(r);
+    }
+
+    // 切网时客户端会重建隧道并掐断在途连接，此时部分客户端不回调 error。
+    // 没有这道兜底，整条 Promise 链就永不 settle，脚本静默吊死到被杀。
+    if (hasTimer) {
+      timer = setTimeout(function () {
+        done({ error: "请求超时（" + Math.round(REQ_TIMEOUT_MS / 1000) + "s 无响应）" });
+      }, REQ_TIMEOUT_MS);
+    }
+
+    try {
+      if (isQX) {
+        opts.method = method;
+        $task.fetch(opts).then(
+          function (resp) {
+            done({ body: resp.body, status: resp.statusCode });
+          },
+          function (err) {
+            done({ error: String((err && err.error) || err) });
+          }
+        );
+      } else if (isSurgeLike) {
+        var cb = function (error, response, body) {
+          if (error) done({ error: String(error) });
+          else done({ body: body, status: response && (response.status || response.statusCode) });
+        };
+        // 必须带着 $httpClient 一起调用。摘成裸函数（var fn = $httpClient.post; fn(...)）
+        // 会丢掉 this 绑定，在 Shadowrocket 的 JSCore 桥接下抛异常或静默不发请求。
+        if (method === "POST") $httpClient.post(opts, cb);
+        else $httpClient.get(opts, cb);
+      } else {
+        done({ error: "unsupported client" });
+      }
+    } catch (e) {
+      done({ error: "请求异常: " + String((e && e.message) || e) });
     }
   });
 }
@@ -102,7 +159,12 @@ function getArgumentTokens() {
     for (var i = 0; i < pairs.length; i++) {
       var idx = pairs[i].indexOf("=");
       if (idx > 0 && pairs[i].slice(0, idx) === "tokens") {
-        return decodeURIComponent(pairs[i].slice(idx + 1));
+        var raw = pairs[i].slice(idx + 1);
+        try {
+          return decodeURIComponent(raw);
+        } catch (e) {
+          return raw; // 含裸 % 等非法转义时按原样用，别让整个脚本挂掉
+        }
       }
     }
     // 直接把整串当 token 填的兜底（如 Loon argument="pgnfw_..."）
@@ -123,17 +185,29 @@ function onCellular() {
   }
 }
 
+// 幂等：watchdog 与正常结束可能都会走到这里，只认第一次。
+var finished = false;
+
 function finish(title, content, allOk) {
-  if (isQX) {
-    $done();
-    return;
+  if (finished) return;
+  finished = true;
+  try {
+    if (isQX) {
+      $done();
+      return;
+    }
+    $done({
+      title: title,
+      content: content,
+      icon: allOk ? "checkmark.shield" : "exclamationmark.shield",
+      "icon-color": allOk ? "#34C759" : "#FF3B30",
+    });
+  } catch (e) {
+    // 面板形态不被支持时退回无参 $done，至少让客户端知道脚本结束了
+    try {
+      $done();
+    } catch (e2) {}
   }
-  $done({
-    title: title,
-    content: content,
-    icon: allOk ? "checkmark.shield" : "exclamationmark.shield",
-    "icon-color": allOk ? "#34C759" : "#FF3B30",
-  });
 }
 
 /* ---------- 业务逻辑 ---------- */
@@ -156,9 +230,10 @@ function sameC24(a, b) {
 function readHistory(key) {
   try {
     var h = JSON.parse(storeRead(key) || "[]");
+    if (!Array.isArray(h)) return [];
     var cutoff = Date.now() - HIST_WINDOW_MS;
     return h.filter(function (e) {
-      return e.ts > cutoff;
+      return e && e.ts > cutoff;
     });
   } catch (e) {
     return [];
@@ -175,7 +250,7 @@ function apiCall(token, slot) {
     url: url,
     headers: { "Content-Type": "application/json" },
     body: "",
-    timeout: 15,
+    timeout: 10, // 认这个字段的客户端会先于 JS 层超时给出错误
   }).then(function (r) {
     if (r.error) return { error: r.error };
     var data = null;
@@ -211,6 +286,17 @@ function apiCall(token, slot) {
   });
 }
 
+// 只对传输层失败重试：切网瞬间第一发常被隧道重建掐断，退避后往往就落在
+// 已经稳定的接口上。服务端给出的明确答复（含 403 槽位冲突）重试没有意义。
+function apiCallWithRetry(token, slot, attempt) {
+  return apiCall(token, slot).then(function (r) {
+    if (!r.error || r.conflict || attempt >= MAX_ATTEMPTS) return r;
+    return delay(RETRY_BASE_MS * attempt).then(function () {
+      return apiCallWithRetry(token, slot, attempt + 1);
+    });
+  });
+}
+
 function ensureWhitelisted(item, index) {
   var kvState = STORE_PREFIX + index;
   var kvHist = STORE_PREFIX + "hist_" + index;
@@ -218,7 +304,7 @@ function ensureWhitelisted(item, index) {
   var ctx = { kvState: kvState, kvHist: kvHist, slot: item.slot };
 
   // 服务端对重复 IP 幂等，直接请求 /add 即可，无需先查
-  return apiCall(item.token, item.slot).then(function (st) {
+  return apiCallWithRetry(item.token, item.slot, 1).then(function (st) {
     if (st.applied) {
       var hist = readHistory(kvHist);
       var last = hist.length ? hist[hist.length - 1] : null;
@@ -232,6 +318,27 @@ function ensureWhitelisted(item, index) {
   });
 }
 
+// 每个 token 独立成败：一个 token 抛异常不该拖垮其它 token 的结果上报。
+function safeEnsure(item, index) {
+  try {
+    return ensureWhitelisted(item, index).catch(function (e) {
+      return {
+        kvState: STORE_PREFIX + index,
+        kvHist: STORE_PREFIX + "hist_" + index,
+        slot: item.slot,
+        st: { error: "脚本异常: " + String((e && e.message) || e) },
+      };
+    });
+  } catch (e) {
+    return Promise.resolve({
+      kvState: STORE_PREFIX + index,
+      kvHist: STORE_PREFIX + "hist_" + index,
+      slot: item.slot,
+      st: { error: "脚本异常: " + String((e && e.message) || e) },
+    });
+  }
+}
+
 // 每 token 一行：不含 token，只含白名单/坑位信息；蜂窝加的 IP 标 📶
 function describe(index, ctx) {
   var st = ctx.st;
@@ -239,7 +346,8 @@ function describe(index, ctx) {
   var head = "#" + (index + 1) + pin + " ";
   if (st.error) return head + "❌ " + st.error;
   if (st.enabled === false) return head + "⚠️ 防火墙未启用";
-  if (!st.applied) return head + "❌ 加白未生效 " + st.whitelist.length + "/" + st.limit;
+  var count = (st.whitelist && st.whitelist.length) || 0;
+  if (!st.applied) return head + "❌ 加白未生效 " + count + "/" + st.limit;
 
   var hist = readHistory(ctx.kvHist);
   var cellIps = {};
@@ -253,7 +361,38 @@ function describe(index, ctx) {
       return ip + slotTag + (cellIps[ip] ? " 📶" : "") + (sameC24(ip, st.currentIp) ? " ←" : "");
     })
     .join("\n    ");
-  return head + "✅ " + st.whitelist.length + "/" + st.limit + "\n    " + ips;
+  return head + "✅ " + count + "/" + st.limit + "\n    " + ips;
+}
+
+function report(results) {
+  var okCount = 0;
+  var exitIp = "?";
+  var lines = [];
+  var changed = false;
+
+  for (var i = 0; i < results.length; i++) {
+    var st = results[i].st;
+    if (st.applied) okCount++;
+    if (st.currentIp) exitIp = st.currentIp;
+    lines.push(describe(i, results[i]));
+
+    var state = (st.currentIp || "?") + "|" + (st.applied ? "1" : "0");
+    if (storeRead(results[i].kvState) !== state) {
+      storeWrite(state, results[i].kvState);
+      changed = true;
+    }
+  }
+
+  var allOk = okCount === results.length;
+  var title =
+    "po0 加白 " + okCount + "/" + results.length + " · 出口 " + exitIp + (onCellular() ? " 📶" : "");
+  var content = lines.join("\n");
+
+  // 仅在出口 IP 或加白状态较上次变化时通知，例行 POST 保持安静
+  if (changed) {
+    notify("po0 防火墙加白", title, content);
+  }
+  finish(title, content, allOk);
 }
 
 // 分隔符兼容 , | ; 、；非 pgnfw_ 开头的段（如未修改的占位提示）直接忽略。
@@ -281,38 +420,28 @@ if (tokens.length === 0) {
   );
   finish("po0 加白：未配置 token", "请填入 pgnfw_ token，多个用 | 分割", false);
 } else {
-  Promise.all(
-    tokens.map(function (t, i) {
-      return ensureWhitelisted(t, i);
+  // 最后一道防线：上面任何一环出意外时，也要赶在客户端 timeout 杀进程之前
+  // 给出可见结果，而不是让用户面对"什么都没发生"。
+  if (hasTimer) {
+    setTimeout(function () {
+      finish(
+        "po0 加白：整体超时",
+        "已等待 " + Math.round(WATCHDOG_MS / 1000) + "s 仍无结果，本轮放弃",
+        false
+      );
+    }, WATCHDOG_MS);
+  }
+
+  delay(SETTLE_DELAY_MS)
+    .then(function () {
+      return Promise.all(
+        tokens.map(function (t, i) {
+          return safeEnsure(t, i);
+        })
+      );
     })
-  ).then(function (results) {
-    var okCount = 0;
-    var exitIp = "?";
-    var lines = [];
-    var changed = false;
-
-    for (var i = 0; i < results.length; i++) {
-      var st = results[i].st;
-      if (st.applied) okCount++;
-      if (st.currentIp) exitIp = st.currentIp;
-      lines.push(describe(i, results[i]));
-
-      var state = (st.currentIp || "?") + "|" + (st.applied ? "1" : "0");
-      if (storeRead(results[i].kvState) !== state) {
-        storeWrite(state, results[i].kvState);
-        changed = true;
-      }
-    }
-
-    var allOk = okCount === results.length;
-    var title =
-      "po0 加白 " + okCount + "/" + results.length + " · 出口 " + exitIp + (onCellular() ? " 📶" : "");
-    var content = lines.join("\n");
-
-    // 仅在出口 IP 或加白状态较上次变化时通知，例行 POST 保持安静
-    if (changed) {
-      notify("po0 防火墙加白", title, content);
-    }
-    finish(title, content, allOk);
-  });
+    .then(report)
+    .catch(function (e) {
+      finish("po0 加白：运行异常", String((e && e.message) || e), false);
+    });
 }
