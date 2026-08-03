@@ -260,9 +260,18 @@ prepend-rules:
 
 这是唯一没法靠家里那台覆盖的场景——用移动数据时出口 IP 和家里完全无关。
 
-### 推荐：Termux + termux-job-scheduler
+**完整方案是两件东西一起用**，各补对方的短板：
 
-比自动化 App 靠谱的关键原因：**Termux 自带真正的 `curl`，TLS 完整，`pinned` 模式能用**，证书问题一次性解决；而且直接复用同一个 `po0fw.sh`，不用维护第二套逻辑。
+| | 负责 | 延迟 | 章节 |
+|---|---|---|---|
+| **Termux + JobScheduler** | 定周期兜底 | ≤15 分钟 | 下面第 0–3 步 |
+| **MacroDroid** | 网络变化时立刻上报 | 秒级 | [补上即时触发](#补上即时触发macrodroid) |
+
+只装 Termux 也能用，只是切网后最坏要等 15 分钟才恢复——Android 的 JobScheduler **没有「网络变化」触发器**，这个缺口只能靠自动化 App 补。
+
+### 定周期：Termux + termux-job-scheduler
+
+直接复用同一个 `po0fw.sh`，不用维护第二套逻辑；Termux 自带完整的 `curl`，`pinned` 模式也能用。
 
 #### 第 0 步：装 Termux
 
@@ -339,8 +348,10 @@ termux-job-scheduler --cancel-all  # 全部取消
 
 两个注意点：
 
-- **周期最短 15 分钟**（`--period-ms 900000`）。这是 Android JobScheduler 的硬限制，不是脚本的问题，比 iOS 那边的 10 分钟略长，可以接受。
-- **必须给 Termux 关掉电池优化**（设置 → 应用 → Termux → 电池 → 无限制），否则会被系统掐掉。
+- **周期最短 15 分钟**（`--period-ms 900000`）。这是 Android JobScheduler 的硬限制，不是脚本的问题。想把切网后的恢复时间压到秒级，见下面的 [MacroDroid](#补上即时触发macrodroid)。
+- **必须给 Termux 关掉电池优化**（设置 → 应用 → Termux → 电池 → 无限制），否则会被系统掐掉，而且没有任何提示。
+
+想确认定时任务真的在跑：`rm -f ~/.po0fw/state_*` 删掉状态文件，等一个周期后 `ls -l ~/.po0fw/`——`state_1` / `state_2` 重新出现就说明跑过了，文件时间戳即为执行时刻。光看日志不行：脚本只在出口 IP 或加白状态**变化**时才写日志，IP 没变就没有新条目。
 
 ### 兜底：cron（不依赖 Termux:API）
 
@@ -372,13 +383,54 @@ cat ~/.po0fw/cron.err   # 应为空
 
 想立刻确认 cron 真在跑，把周期临时改成 `* * * * *`（每分钟），等两分钟看 `cron.err`，确认无误再改回 `*/15`。
 
-### 备选：MacroDroid / Tasker
+### 补上即时触发：MacroDroid
 
-优势是能做**网络类型变化的即时触发**，这一点 JobScheduler 做不到（它只能定周期）。劣势是 TLS 控制弱——裸 IP 的证书多半过不去，只能开「忽略 SSL 错误」，等价于 `insecure`，token 会暴露给中间人。
+**JobScheduler 没有「网络变化」这个触发器。** `--network any` 是**约束**（必须有网才执行），不是触发器；它能用的条件只有周期、充电、空闲、存储、内容 URI。所以只走 Termux 的话，切网后最坏要等 15 分钟才恢复。
 
-配置：触发器「连接 → 网络类型变化」+「定时」，动作「HTTP 请求 → POST」到 `https://124.221.69.228/api/firewall/<token>/add`。
+用 MacroDroid（免费版够用）补上即时触发，和 Termux 各司其职：
 
-**想两者兼得**：Termux 管定时兜底（TLS 安全），MacroDroid 只负责在网络变化时通过 `RUN_COMMAND` intent 去调 Termux 里的 `po0fw.sh`。这样即时性和证书安全都有了，代价是配置复杂一些。
+| | 负责 | 延迟 |
+|---|---|---|
+| **MacroDroid** | 网络变化时立刻上报 | 秒级 |
+| **Termux（保留）** | 每 15 分钟兜底，防 MacroDroid 被系统杀掉时失守 | ≤15 分钟 |
+
+**两个都要留**，别互相替代。
+
+#### 配置
+
+**触发器**（三个就够，更多会重叠——连上 WiFi 时「网络可用」「网络已连接」「启用 Wi-Fi」会同时触发，一次变化发好几轮请求。服务端幂等所以不出错，只是浪费）：
+
+- **IP地址更改** —— 最精准，直接命中我们关心的事件
+- **网络可用** —— 覆盖 WiFi ↔ 蜂窝 的切换
+- **禁用 Wi-Fi** —— 关 WiFi 转蜂窝时，配合下面的延迟正好等蜂窝接管
+
+**动作**（顺序不能错，延迟必须在最前面）：
+
+1. **延迟 8 秒**
+2. HTTP 请求 (POST) → `https://124.221.69.228/api/firewall/<第一个 token>/add`
+3. HTTP 请求 (POST) → `https://124.221.69.228/api/firewall/<第二个 token>/add`
+
+**约束条件**：留空。
+
+#### 三个容易踩的点
+
+- **URL 结尾必须是 `/add`。** MacroDroid 的动作列表会把长 URL 截断显示，看不到结尾，得点进去逐字核对。少了 `/add` 就打到错误端点，不会加白，而且不报错。
+- **那 8 秒延迟不能省。** 网络变化那一瞬间接口往往还没就绪，直接发大概率失败。脚本里的 2 秒 settle、Windows 任务计划里的 10 秒延迟，都是同一个道理。
+- **不要勾「忽略 SSL 错误」。** 保持默认的证书校验即可——见下方说明。
+
+#### 关于证书：不需要关校验
+
+早期版本的本文写着「MacroDroid 的 TLS 控制弱，裸 IP 证书过不去，只能开忽略 SSL 错误」。**这个结论是错的，已更正。**
+
+实测证据：Windows 版用 `"tls": "strict"`、Termux 版用 `PO0FW_TLS="strict"`，**两边都一次通过**。.NET 与 OpenSSL 是两套完全独立的校验实现，都过了，说明这个 API 的证书是真正有效的。所以 MacroDroid 直接发普通 HTTPS 就行，不必关校验，也就没有 token 泄露的顾虑。
+
+#### 验证
+
+保存宏 → **关掉 WiFi** → 等 10 秒 → 去 po0 网页面板刷新，看白名单里有没有出现你的蜂窝 IP。
+
+### 备选：Tasker
+
+思路与 MacroDroid 相同（触发器 + HTTP 请求动作），付费但更灵活。也可以用官方的 [Termux:Tasker](https://github.com/termux/termux-tasker/releases) 插件，让 Tasker 直接调 Termux 里的 `po0fw.sh`，复用同一套逻辑——注意该插件同样受「必须与 Termux 同源」的签名限制。
 
 ### 别忘了覆写规则
 
