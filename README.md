@@ -36,6 +36,23 @@ Surge/Loon/Stash/Shadowrocket/Quantumult X 共用 `scripts/po0-firewall-whitelis
 
 **做不成模块**：两者共用的 mihomo 内核没有 cron / event 脚本这个扩展点（Verge Rev 的「Script」和 FlClash 的「覆写」都只是生成配置时跑一次的配置变换，没有网络与定时能力）。
 
-改用系统调度器跑 [`clash/po0fw.sh`](./clash/po0fw.sh)（POSIX sh，只依赖 `curl`，busybox 可跑）。又因为服务端按 C 段（/24）加白，**同一出口 IP 下只需一台设备上报**——在常开设备（软路由 / NAS / 树莓派）上挂一条 10 分钟 cron，同 WAN 出口下的所有机器就都被覆盖了，只有蜂窝上网的手机需要自己上报。
+改用系统调度器跑 [`clash/po0fw.sh`](./clash/po0fw.sh)（POSIX sh，只依赖 `curl`，busybox 可跑）。又因为服务端按 C 段（/24）加白，**同一出口 IP 下只需一台设备上报**，同 WAN 出口下的其它机器一行配置都不用加。
 
-安装、TLS 证书处理、Clash 规则覆写与 Android 方案见 [`clash/README.md`](./clash/README.md)。
+| 平台 | 方式 |
+|---|---|
+| Linux / 软路由 / NAS | `crontab` 每 10 分钟 |
+| macOS | [`clash/com.po0fw.whitelist.plist`](./clash/com.po0fw.whitelist.plist) —— launchd，定时 + `WatchPaths` 网络变化触发 |
+| Android | Termux + `termux-job-scheduler`（自带完整 TLS 的 `curl`，可复用同一个脚本） |
+
+零售消费级路由器（无 SSH / 无 cron / busybox `wget` 常不支持 HTTPS）基本做不了，别耗时间；开放固件的软路由没问题。
+
+安装、TLS 证书处理与 Clash 规则覆写见 [`clash/README.md`](./clash/README.md)。
+
+### 槽位策略：只让一台设备钉
+
+`@槽位` 能让 IP 永不被 FIFO 淘汰，但**钉错了比不钉更糟**——它钉的是「本机**当前**的 IP」：
+
+- **会移动的设备不要钉。** 手机钉了槽位后，一出门该槽位就变成蜂窝 IP，**家里 WAN 当场从白名单消失**，同网络的电脑立刻失联。
+- 两台设备钉同一槽位会互相顶替；两台设备 IP 相同却钉不同槽位会收到 **403**。
+
+正确做法是**只给始终待在同一出口的那台设备钉**（如常年连家里 WiFi 的 Mac 或常开设备），手机一律不加 `@`，让它们在剩余的 slotless 坑位里按 FIFO 轮转、被挤掉后自愈。
