@@ -266,10 +266,28 @@ prepend-rules:
 
 #### 第 0 步：装 Termux
 
-**从 F-Droid 装，不要用 Play 商店版**（那个已停更多年，`pkg` 装不了东西）。两个都要，`termux-job-scheduler` 在后一个包里：
+要装**两个** APP：Termux 本体，以及 Termux:API（`termux-job-scheduler` 靠它干活）。**不要用 Play 商店版**，那个已停更多年，`pkg` 装不了东西。
 
-- Termux：<https://f-droid.org/packages/com.termux/>
-- Termux:API：<https://f-droid.org/packages/com.termux.api/>
+> ⚠️ **两个 APP 必须来自同一个源**，F-Droid 和 GitHub 二选一，不能混。
+>
+> 两边的构建**签名不同**，而 Termux 与 Termux:API 之间是靠 Android 广播通信、系统会校验签名的。混装的话广播被拒，**所有 `termux-*` 命令都会永远挂着、不报任何错**——这是本节最难查的一种失败，因为它零输出、零报错。
+>
+> 已经混装了的话：先把其中一个卸载（同包名不同签名，Android 会拒绝直接覆盖安装），再从正确的源重装。
+
+| 源 | Termux | Termux:API |
+|---|---|---|
+| F-Droid | <https://f-droid.org/packages/com.termux/> | <https://f-droid.org/packages/com.termux.api/> |
+| GitHub | <https://github.com/termux/termux-app/releases> | <https://github.com/termux/termux-api/releases> |
+
+GitHub 那边按设备架构选 APK（`pkg` 输出里的 `aarch64` 对应 `arm64-v8a`），只有通用 APK 时直接下它。
+
+装完先验一下两个 APP 通不通：
+
+```sh
+termux-battery-status
+```
+
+打印出一段 JSON 就是通的；**卡住不动**就是上面那个签名不一致的问题。
 
 #### 第 1 步：装 + 配 + 验证（一段粘贴）
 
@@ -324,6 +342,36 @@ termux-job-scheduler --cancel-all  # 全部取消
 - **周期最短 15 分钟**（`--period-ms 900000`）。这是 Android JobScheduler 的硬限制，不是脚本的问题，比 iOS 那边的 10 分钟略长，可以接受。
 - **必须给 Termux 关掉电池优化**（设置 → 应用 → Termux → 电池 → 无限制），否则会被系统掐掉。
 
+### 兜底：cron（不依赖 Termux:API）
+
+Termux:API 实在搞不定时，用 cron 完全绕开它。代价是 Termux 得常驻、比 JobScheduler 费电，通知栏会有常驻提示。
+
+```sh
+pkg install -y cronie termux-services
+```
+
+**装完必须彻底退出 Termux 再重开**（从后台任务里划掉，不是新开标签页），否则 runit 服务管理器没起来，`sv` 系列命令会找不到服务。重开后：
+
+```sh
+sv-enable crond
+sv up crond
+mkdir -p ~/.po0fw
+echo "*/15 * * * * $HOME/po0fw.sh >> $HOME/.po0fw/cron.err 2>&1" | crontab -
+termux-wake-lock
+```
+
+用 `echo ... | crontab -` 而不是 `crontab -e`，是为了避开在手机上用 vi 编辑。`$HOME` 在写入时展开成绝对路径——crontab 里不能靠 `~`。
+
+验证：
+
+```sh
+crontab -l          # 应打印出那一行
+sv status crond     # 应显示 run
+cat ~/.po0fw/cron.err   # 应为空
+```
+
+想立刻确认 cron 真在跑，把周期临时改成 `* * * * *`（每分钟），等两分钟看 `cron.err`，确认无误再改回 `*/15`。
+
 ### 备选：MacroDroid / Tasker
 
 优势是能做**网络类型变化的即时触发**，这一点 JobScheduler 做不到（它只能定周期）。劣势是 TLS 控制弱——裸 IP 的证书多半过不去，只能开「忽略 SSL 错误」，等价于 `insecure`，token 会暴露给中间人。
@@ -375,4 +423,5 @@ Get-Content C:\ProgramData\po0fw\po0fw.log -Tail 20 -Wait
 | macOS：launchd 不跑 | `launchctl print gui/$(id -u)/com.po0fw.whitelist` 看是否注册；`/tmp/po0fw.err.log` 看有没有报错 |
 | Android：`CANNOT LINK EXECUTABLE "curl"` / `cannot locate symbol` | Termux 包版本不一致（只跑了 `pkg update` 没跑 `pkg upgrade`）。`pkg upgrade -y` 修复；仍不行再 `pkg install -y --reinstall openssl libngtcp2 curl` |
 | Android：`chmod: cannot access ~/po0fw.sh` / `No such file` | 上一条的连带——curl 坏了导致脚本没下下来。先修 curl 再重跑下载 |
+| Android：`termux-*` 命令**静默卡住、零输出零报错** | Termux 与 Termux:API 不同源（F-Droid ↔ GitHub 混装），签名不一致导致广播被拒。见「第 0 步」。注意 `pm list packages` 在 Termux 里查不到东西（Android 11+ 的包可见性限制），别拿它当判据——用 `termux-battery-status` 试 |
 | Android：Termux 任务不跑 | `termux-job-scheduler -p` 看任务在不在；确认已给 Termux 关掉电池优化 |
