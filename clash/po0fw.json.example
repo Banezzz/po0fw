@@ -1,0 +1,15 @@
+{
+  "_comment_tokens": "pgnfw_ token，多台机器用竖杠或逗号分割。常住同一出口的机器（如家里的 Windows）才加 @槽位，会移动的设备一律不加——详见 clash/README.md 的「槽位策略」。",
+  "tokens": "pgnfw_第一台@0|pgnfw_第二台@0",
+
+  "_comment_tls": "strict | pinned | insecure。裸 IP 的 HTTPS 多半过不了证书校验。先手动跑 .\\po0fw.ps1 -Show 看看；报证书错就跑 .\\po0fw.ps1 -ShowPin，把它打印的 tls 与 pin 两项贴回来。注意这里的 pin 是整张证书的 SHA-256，和 po0fw.sh --pin 的 SPKI 公钥指纹不是一回事，不要互相套用。",
+  "tls": "strict",
+  "pin": "",
+
+  "_comment_optional": "以下都可以不填，留空即用默认值。",
+  "api": "https://124.221.69.228/api/firewall",
+  "timeoutSec": 12,
+  "maxAttempts": 3,
+  "retryBaseSec": 2,
+  "stateDir": ""
+}

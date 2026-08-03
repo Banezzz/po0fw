@@ -18,7 +18,7 @@ Clash Verge Rev 和 FlClash 共用 **mihomo（Clash.Meta）** 内核，而 **mih
 
 | 出口 | 谁来上报 |
 |---|---|
-| 家里 WiFi（Mac、Windows、手机连 WiFi 时都在这个出口下） | **一台始终在家的设备**——Mac 最现实，见下 |
+| 家里 WiFi（Mac、Windows、手机连 WiFi 时都在这个出口下） | **一台始终在家的设备**——常住的台式机（Windows / Mac）最现实，见下 |
 | iPhone 蜂窝 | iPhone 自己（Shadowrocket 模块，见仓库根目录） |
 | Android 蜂窝 | Android 自己（Termux，见下） |
 
@@ -46,9 +46,10 @@ Clash Verge Rev 和 FlClash 共用 **mihomo（Clash.Meta）** 内核，而 **mih
 
 | 设备 | 配置 | 理由 |
 |---|---|---|
-| **始终在家 WiFi 的那台**（Mac / 常开设备） | `pgnfw_A@0\|pgnfw_B@0` | 家里 WAN 永不被淘汰。这台睡眠也不影响——钉住的行不参与淘汰，只在 WAN IP 真变了时才需要重写 |
+| **始终在家 WiFi 的那台**（常住的 Windows / Mac / 常开设备）——**只有这一台钉** | `pgnfw_A@0\|pgnfw_B@0` | 家里 WAN 永不被淘汰。这台关机或睡眠也不影响——钉住的行不参与淘汰，只在 WAN IP 真变了时才需要重写 |
 | iPhone | `pgnfw_A\|pgnfw_B`（**不加 @**） | 它会移动，钉了反而把家里 WAN 顶掉 |
 | Android | `pgnfw_A\|pgnfw_B`（**不加 @**） | 同上 |
+| 笔记本（会带出门的 Mac） | 不加 `@` | 同上，除非它其实从不离开家 |
 
 剩下 4 个 slotless 坑位留给蜂窝、公司、临时网络按 FIFO 轮转；被挤掉的设备几分钟内由自己的定时任务补回，会自愈。
 
@@ -105,6 +106,45 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.po0fw.whitelist.plis
 模板里配了三件事：`StartInterval 600`（每 10 分钟）、`RunAtLoad`（登录即跑一次）、`WatchPaths` 盯 `/etc/resolv.conf` 与 `SystemConfiguration`——切 WiFi、重新拨号、换 DHCP 租约时这些路径会被系统重写，等效于 Surge 的 `network-changed`。`ThrottleInterval 30` 防止网络抖动时连续触发。
 
 Mac 睡眠期间不跑，唤醒后补一次。**但因为槽位是钉住的，睡眠期间白名单里那条也不会被淘汰**，所以不影响 Windows 用。
+
+## Windows（任务计划程序）
+
+常住家里的如果是 Windows 那台，就让它来当「家里 WAN 上报者」——它常年开机、常年连同一个 WiFi，是最理想的人选。
+
+用 [`po0fw.ps1`](./po0fw.ps1)，兼容 **Windows PowerShell 5.1**（系统自带）和 PowerShell 7+。
+
+```powershell
+# 1. 装脚本（管理员 PowerShell）
+mkdir C:\po0fw ; cd C:\po0fw
+irm https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.ps1          -OutFile po0fw.ps1
+irm https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.json.example -OutFile po0fw.json
+
+notepad po0fw.json            # 填 tokens；常住机器加 @0
+
+# 2. 先手动跑通，确认没有证书问题
+.\po0fw.ps1 -Show
+
+# 3. 注册计划任务（模板里的 __PO0FW_DIR__ 换成实际目录）
+irm https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw-task.xml -OutFile po0fw-task.xml
+$xml = (Get-Content C:\po0fw\po0fw-task.xml -Raw) -replace '__PO0FW_DIR__', 'C:\po0fw'
+Register-ScheduledTask -TaskName 'po0fw-whitelist' -Xml $xml -Force
+
+# 4. 立刻跑一次验证
+Start-ScheduledTask -TaskName 'po0fw-whitelist'
+Get-ScheduledTaskInfo -TaskName 'po0fw-whitelist' | Format-List TaskName, LastRunTime, LastTaskResult
+```
+
+`LastTaskResult` 为 `0` 即成功。
+
+模板配了三个触发器：**每 10 分钟**、**开机后 1 分钟**、以及 **NetworkProfile 事件 10000（网络已连接）**——最后这个就是 Windows 版的 `network-changed`，带 10 秒延迟等接口稳定。任务以 **SYSTEM** 身份运行：不用存密码、不登录也跑、而且**不会每 10 分钟闪一个黑框**。
+
+要改配置直接编辑 `po0fw.json`，不用重新注册任务。卸载：
+
+```powershell
+Unregister-ScheduledTask -TaskName 'po0fw-whitelist' -Confirm:$false
+```
+
+> **证书指纹在两个平台上不通用。** `po0fw.ps1 -ShowPin` 输出的是**整张证书的 SHA-256**，而 `po0fw.sh --pin` 输出的是 **SPKI 公钥指纹**。安全效果一样（都能挡中间人），但值不同，别互相复制。原因是导出 SPKI 的 API 在 .NET Framework 4.x 上不存在，PowerShell 5.1 用不了。
 
 ## TLS 三档（裸 IP 的 HTTPS 一定会碰到）
 
