@@ -56,20 +56,33 @@ try {
 # "There is no Runspace available to run scripts in this thread"，
 # 表现为握手直接失败——连 insecure 都连不上。5.1 上那个经典的
 # ServicePointManager + {$true} 写法在 PowerShell 7 上失效就是这个原因。
+# 类型名带版本后缀，改动下面的 C# 时请把后缀 +1。
+# PowerShell 一旦 Add-Type 过某个类型名，同一会话里就无法再重定义。交互式
+# 反复调试时，旧版类型会残留在会话里，而"类型已存在"的守卫会跳过 Add-Type，
+# 于是拿到的是缺少新成员的旧类（表现为"在此对象上找不到属性 Callback"）。
+# 换个名字能让新旧版本在同一会话里共存，不必重开窗口。
 $script:CertTypeReady = $true
-if (-not ('Po0FwCert' -as [type])) {
+$script:CertTypeError = ''
+$existingCertType = 'Po0FwCertV2' -as [type]
+if ($existingCertType -and -not $existingCertType.GetField('Callback')) {
+  # 同名但成员对不上：只可能是本会话里残留了更旧的同名类型，重定义不了
+  Write-Host '[po0fw] 当前 PowerShell 会话里残留着旧版本的内置证书校验器，无法重定义。'
+  Write-Host '        请新开一个 PowerShell 窗口再跑（任务计划程序每次都是新进程，不受影响）。'
+  exit 2
+}
+if (-not $existingCertType) {
   try {
     Add-Type -TypeDefinition @"
 using System;
 using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-public static class Po0FwCert {
+public static class Po0FwCertV2 {
     public static string Mode = "strict";          // strict | pinned | insecure
     public static string Pin  = "";                // 整张证书的 SHA-256（base64）
     public static string LastFingerprint = "";     // 每次握手都记下来，供 -ShowPin 用
     // 委托在 C# 侧就建好，PowerShell 只管取用。
-    // 不能在 PowerShell 里写 [RemoteCertificateValidationCallback]([Po0FwCert]::"Validate")：
+    // 不能在 PowerShell 里写 [RemoteCertificateValidationCallback]([Po0FwCertV2]::"Validate")：
     // PS 7 支持 PSMethod 自动转委托，5.1 不支持，会报
     // "无法将 PSMethod 类型的值转换为 RemoteCertificateValidationCallback 类型"。
     public static readonly RemoteCertificateValidationCallback Callback =
@@ -93,7 +106,7 @@ public static class Po0FwCert {
   }
 }
 $script:CertCallback = $null
-if ($script:CertTypeReady) { $script:CertCallback = [Po0FwCert]::Callback }
+if ($script:CertTypeReady) { $script:CertCallback = [Po0FwCertV2]::Callback }
 
 # ---------- 配置 ----------
 
@@ -138,8 +151,8 @@ $logPath = Join-Path $cfg.stateDir 'po0fw.log'
 
 # 交给 C# 校验器（回调线程上读不到 PowerShell 变量，只能走静态字段）
 if ($script:CertTypeReady) {
-  [Po0FwCert]::Mode = [string]$cfg.tls
-  [Po0FwCert]::Pin = ([string]$cfg.pin) -replace '^sha256//', ''
+  [Po0FwCertV2]::Mode = [string]$cfg.tls
+  [Po0FwCertV2]::Pin = ([string]$cfg.pin) -replace '^sha256//', ''
 }
 
 function Write-Log {
@@ -226,8 +239,8 @@ function Invoke-Po0PostWithRetry {
 
 if ($ShowPin) {
   $probe = ([string]$cfg.api) -replace '/api/firewall/?$', '/'
-  [Po0FwCert]::Mode = 'insecure'      # 取指纹时先放行，否则自签证书连不上
-  [Po0FwCert]::LastFingerprint = ''
+  [Po0FwCertV2]::Mode = 'insecure'      # 取指纹时先放行，否则自签证书连不上
+  [Po0FwCertV2]::LastFingerprint = ''
   try {
     $req = [System.Net.HttpWebRequest]::CreateHttp($probe)
     $req.Method = 'HEAD'
@@ -237,7 +250,7 @@ if ($ShowPin) {
     # 握手成功即可拿到指纹，HTTP 状态码是什么无所谓
     try { $req.GetResponse().Close() } catch { }
   } catch { }
-  $captured = [Po0FwCert]::LastFingerprint
+  $captured = [Po0FwCertV2]::LastFingerprint
   if (-not $captured) {
     Write-Host "取证书失败：确认 $probe 可达，且当前出口 IP 已在白名单里"
     exit 1
