@@ -1,4 +1,4 @@
-{
+﻿{
   "_comment_tokens": "pgnfw_ token，多台机器用竖杠或逗号分割。常住同一出口的机器（如家里的 Windows）才加 @槽位，会移动的设备一律不加——详见 clash/README.md 的「槽位策略」。",
   "tokens": "pgnfw_第一台@0|pgnfw_第二台@0",
 

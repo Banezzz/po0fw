@@ -1,4 +1,4 @@
-<#
+﻿<#
   po0 防火墙自动加白 · Windows PowerShell 版
 
   给 Clash 系客户端（Clash Verge Rev / FlClash）用户准备：mihomo 内核没有
@@ -15,6 +15,12 @@
   配置：同目录的 po0fw.json，见 po0fw.json.example。
 
   退出码：0 全部成功；1 有失败；2 配置错误。
+
+  ⚠️ 本文件必须保存为「带 BOM 的 UTF-8」，改动时别把 BOM 丢了。
+     Windows PowerShell 5.1 在没有 BOM 时会按系统 ANSI（中文系统即 GBK）解码
+     .ps1，文件里的中文会变成乱码，乱码字节还会截断字符串引号，最终报一串
+     "字符串缺少终止符" / "缺少右 }" 的语法错误，脚本根本跑不起来。
+     PowerShell 7 默认按 UTF-8 读，所以这个问题只在 5.1 上出现。
 
   兼容性：Windows PowerShell 5.1 与 PowerShell 7+ 均可。
     - 5.1 没有 -SkipCertificateCheck，7 又会忽略 ServicePointManager 的
@@ -35,6 +41,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
+# 5.1 的控制台默认用系统代码页（中文系统是 GBK），中文能显示但 emoji 会变成 ?。
+# 抬到 UTF-8 让 -Show 的输出正常。失败也无所谓，日志文件本来就按 UTF-8 写。
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+
 # 5.1 默认可能还在用 TLS 1.0/1.1，显式抬到 1.2+
 try {
   [System.Net.ServicePointManager]::SecurityProtocol =
@@ -46,8 +56,10 @@ try {
 # "There is no Runspace available to run scripts in this thread"，
 # 表现为握手直接失败——连 insecure 都连不上。5.1 上那个经典的
 # ServicePointManager + {$true} 写法在 PowerShell 7 上失效就是这个原因。
+$script:CertTypeReady = $true
 if (-not ('Po0FwCert' -as [type])) {
-  Add-Type -TypeDefinition @"
+  try {
+    Add-Type -TypeDefinition @"
 using System;
 using System.Net.Security;
 using System.Security.Cryptography;
@@ -56,6 +68,12 @@ public static class Po0FwCert {
     public static string Mode = "strict";          // strict | pinned | insecure
     public static string Pin  = "";                // 整张证书的 SHA-256（base64）
     public static string LastFingerprint = "";     // 每次握手都记下来，供 -ShowPin 用
+    // 委托在 C# 侧就建好，PowerShell 只管取用。
+    // 不能在 PowerShell 里写 [RemoteCertificateValidationCallback]([Po0FwCert]::"Validate")：
+    // PS 7 支持 PSMethod 自动转委托，5.1 不支持，会报
+    // "无法将 PSMethod 类型的值转换为 RemoteCertificateValidationCallback 类型"。
+    public static readonly RemoteCertificateValidationCallback Callback =
+        new RemoteCertificateValidationCallback(Validate);
     public static bool Validate(object s, X509Certificate cert, X509Chain chain, SslPolicyErrors errors) {
         if (cert != null) {
             using (var sha = SHA256.Create())
@@ -67,8 +85,15 @@ public static class Po0FwCert {
     }
 }
 "@
+  } catch {
+    # 编译失败就只能用系统默认校验，pinned / insecure 都做不了。
+    # 这里不直接退出：strict 仍然可用，下面配置校验时再按 tls 模式决定是否报错。
+    $script:CertTypeReady = $false
+    $script:CertTypeError = $_.Exception.Message
+  }
 }
-$script:CertCallback = [System.Net.Security.RemoteCertificateValidationCallback]([Po0FwCert]::"Validate")
+$script:CertCallback = $null
+if ($script:CertTypeReady) { $script:CertCallback = [Po0FwCert]::Callback }
 
 # ---------- 配置 ----------
 
@@ -88,7 +113,11 @@ $cfg = @{
 
 if (Test-Path -LiteralPath $ConfigPath) {
   try {
-    $json = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $rawCfg = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8
+    # 保险：个别版本的 Get-Content 不剥 BOM，残留的 U+FEFF 会让 ConvertFrom-Json 报错。
+    # 用 [char]0xFEFF 而不是把 BOM 字面量写进正则——那个字符不可见，容易被编辑器弄丢。
+    $rawCfg = $rawCfg.TrimStart([char]0xFEFF)
+    $json = $rawCfg | ConvertFrom-Json
     foreach ($k in @($cfg.Keys)) {
       if ($json.PSObject.Properties.Name -contains $k -and $null -ne $json.$k -and "$($json.$k)" -ne '') {
         $cfg[$k] = $json.$k
@@ -108,8 +137,10 @@ $null = New-Item -ItemType Directory -Force -Path $cfg.stateDir -ErrorAction Sil
 $logPath = Join-Path $cfg.stateDir 'po0fw.log'
 
 # 交给 C# 校验器（回调线程上读不到 PowerShell 变量，只能走静态字段）
-[Po0FwCert]::Mode = [string]$cfg.tls
-[Po0FwCert]::Pin = ([string]$cfg.pin) -replace '^sha256//', ''
+if ($script:CertTypeReady) {
+  [Po0FwCert]::Mode = [string]$cfg.tls
+  [Po0FwCert]::Pin = ([string]$cfg.pin) -replace '^sha256//', ''
+}
 
 function Write-Log {
   param([string]$Message)
@@ -145,8 +176,9 @@ function Invoke-Po0Post {
     # 绕过系统代理。注意 TUN 模式绕不过去，那要靠 Clash 里的
     # IP-CIDR ... DIRECT 规则（见 override.yaml）。
     $req.Proxy = $null
-    # 三种模式的判断都在 C# 校验器里，strict 也走它（返回 errors == None）
-    $req.ServerCertificateValidationCallback = $script:CertCallback
+    # 三种模式的判断都在 C# 校验器里，strict 也走它（返回 errors == None）。
+    # C# 编译失败时留空，退回系统默认校验（等价于 strict）。
+    if ($null -ne $script:CertCallback) { $req.ServerCertificateValidationCallback = $script:CertCallback }
 
     $req.ContentLength = 0
     $reqStream = $req.GetRequestStream()
@@ -228,6 +260,11 @@ if (-not $cfg.tokens) {
 }
 if (@('strict', 'pinned', 'insecure') -notcontains $cfg.tls) {
   Write-Log "❌ tls 只能是 strict / pinned / insecure，当前是 $($cfg.tls)"
+  exit 2
+}
+if ($cfg.tls -ne 'strict' -and -not $script:CertTypeReady) {
+  Write-Log "❌ tls=$($cfg.tls) 需要内置证书校验器，但它编译失败：$($script:CertTypeError)"
+  Write-Log '   可先改用 tls=strict 试试；若确实需要 pinned/insecure，请把上面这条报错发给维护者'
   exit 2
 }
 if ($cfg.tls -eq 'pinned' -and -not $cfg.pin) {
