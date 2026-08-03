@@ -53,9 +53,13 @@ Clash Verge Rev 和 FlClash 共用 **mihomo（Clash.Meta）** 内核，而 **mih
 
 剩下 4 个 slotless 坑位留给蜂窝、公司、临时网络按 FIFO 轮转；被挤掉的设备几分钟内由自己的定时任务补回，会自愈。
 
+> **如果你之前已经给手机钉了槽位，现在要去掉。** 症状很明确：手机和常住机器同在家里 WiFi 时 IP 相同却钉着不同槽位，服务端会返回 **403 槽位冲突**；而手机一出门，它钉的槽位变成蜂窝 IP，家里 WAN 当场消失，电脑立刻失联。把手机的参数从 `pgnfw_A@0|pgnfw_B@1` 改回 `pgnfw_A|pgnfw_B` 即可。
+
 > 同一个槽位号在不同 token 上互不干扰（它们是两台机器各自的白名单），所以同一设备在两个 token 上用同一个号最好记。
 
 ## Linux / 常开设备（软路由 / NAS / 树莓派）
+
+> **这台机器上如果跑着 Clash**（软路由尤其常见），先加下面「Clash 规则覆写」那条 DIRECT 规则再往下走，否则请求会被吃进代理，服务端看到的是代理出口 IP。不跑 Clash 的设备可以跳过。
 
 ```sh
 mkdir -p /opt/po0fw && cd /opt/po0fw
@@ -74,7 +78,9 @@ crontab -e        # 加上：
 
 ## macOS（launchd）
 
-Mac 常年连在家里 WiFi，是最现实的「家里 WAN 上报者」。用 launchd 而不是 cron——它能同时做定时和**网络变化触发**。
+Mac 常年连在家里 WiFi 的话，也可以由它来当「家里 WAN 上报者」。用 launchd 而不是 cron——它能同时做定时和**网络变化触发**。
+
+> **Mac 上如果跑着 Clash Verge Rev**，先加下面「Clash 规则覆写」那条 DIRECT 规则再往下走。
 
 ```sh
 # 1. 装脚本
@@ -111,34 +117,97 @@ Mac 睡眠期间不跑，唤醒后补一次。**但因为槽位是钉住的，�
 
 常住家里的如果是 Windows 那台，就让它来当「家里 WAN 上报者」——它常年开机、常年连同一个 WiFi，是最理想的人选。
 
-用 [`po0fw.ps1`](./po0fw.ps1)，兼容 **Windows PowerShell 5.1**（系统自带）和 PowerShell 7+。
+用 [`po0fw.ps1`](./po0fw.ps1)，兼容 **Windows PowerShell 5.1**（系统自带）和 PowerShell 7+。全程用**管理员权限**的 PowerShell。
+
+### 第 0 步：先在 Clash 里加 DIRECT 规则 ⚠️
+
+**这台机器跑着 Clash，所以这一步不能跳。** 开了 TUN 模式时所有流量都进 mihomo，脚本的请求会被吃进代理，服务端看到的就是代理出口 IP——加白等于白加。而 `--noproxy` 之类的办法**绕不过 TUN 路由**。
+
+Clash Verge Rev → **订阅 → 全局扩展配置**（Merge 类型）：
+
+```yaml
+prepend-rules:
+  - IP-CIDR,124.221.69.228/32,DIRECT,no-resolve
+```
+
+写在这里订阅更新后不会被冲掉。详见下面的「Clash 规则覆写」。
+
+### 第 1 步：装脚本
 
 ```powershell
-# 1. 装脚本（管理员 PowerShell）
 mkdir C:\po0fw ; cd C:\po0fw
 irm https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.ps1          -OutFile po0fw.ps1
 irm https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.json.example -OutFile po0fw.json
+irm https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw-task.xml     -OutFile po0fw-task.xml
+```
 
-notepad po0fw.json            # 填 tokens；常住机器加 @0
+### 第 2 步：填 token
 
-# 2. 先手动跑通，确认没有证书问题
+```powershell
+notepad C:\po0fw\po0fw.json
+```
+
+这台是常住机器，**加 `@0`** 把家里 WAN 钉死：
+
+```json
+"tokens": "pgnfw_第一个@0|pgnfw_第二个@0",
+```
+
+同时记得**把手机上的 `@槽位` 去掉**，否则会 403 冲突——见上面的「槽位策略」。
+
+### 第 3 步：先手动跑一次 ⚠️
+
+**别跳过这步直接注册任务**，证书问题就在这里暴露。
+
+```powershell
+cd C:\po0fw
 .\po0fw.ps1 -Show
+```
 
-# 3. 注册计划任务（模板里的 __PO0FW_DIR__ 换成实际目录）
-irm https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw-task.xml -OutFile po0fw-task.xml
+成功长这样：
+
+```
+po0 加白 2/2 · 出口 x.x.x.0/24
+#1 📌0 ✅ 3/5  x.x.x.0/24
+#2 📌0 ✅ 3/5  x.x.x.0/24
+```
+
+**如果报 SSL / 证书错误**，跑：
+
+```powershell
+.\po0fw.ps1 -ShowPin
+```
+
+它会打印 `"tls"` 和 `"pin"` 两行，把这两行替换进 `po0fw.json`，然后重跑第 3 步。
+
+### 第 4 步：注册计划任务
+
+```powershell
 $xml = (Get-Content C:\po0fw\po0fw-task.xml -Raw) -replace '__PO0FW_DIR__', 'C:\po0fw'
 Register-ScheduledTask -TaskName 'po0fw-whitelist' -Xml $xml -Force
+```
 
-# 4. 立刻跑一次验证
+### 第 5 步：验证
+
+```powershell
 Start-ScheduledTask -TaskName 'po0fw-whitelist'
+Start-Sleep 15
 Get-ScheduledTaskInfo -TaskName 'po0fw-whitelist' | Format-List TaskName, LastRunTime, LastTaskResult
 ```
 
-`LastTaskResult` 为 `0` 即成功。
+`LastTaskResult` 为 **`0`** 即成功；为 `1` 说明上报失败，看日志：
+
+```powershell
+Get-Content C:\ProgramData\po0fw\po0fw.log -Tail 20
+```
+
+最权威的判据还是去 po0 网页面板看白名单里有没有这台的 WAN IP、且带 📌0 标记。
+
+### 说明
 
 模板配了三个触发器：**每 10 分钟**、**开机后 1 分钟**、以及 **NetworkProfile 事件 10000（网络已连接）**——最后这个就是 Windows 版的 `network-changed`，带 10 秒延迟等接口稳定。任务以 **SYSTEM** 身份运行：不用存密码、不登录也跑、而且**不会每 10 分钟闪一个黑框**。
 
-要改配置直接编辑 `po0fw.json`，不用重新注册任务。卸载：
+日志与状态文件在 `C:\ProgramData\po0fw\`。要改配置直接编辑 `po0fw.json`，不用重新注册任务。卸载：
 
 ```powershell
 Unregister-ScheduledTask -TaskName 'po0fw-whitelist' -Confirm:$false
@@ -236,19 +305,39 @@ FlClash 是 VPN 模式，**必须**在覆写里加上前面那条 DIRECT 规则�
 
 ## 排错
 
+手动跑一次看结果 + 看日志：
+
 ```sh
-./po0fw.sh -v          # 手动跑，直接看结果
+# Linux / macOS / Termux
+./po0fw.sh -v
 tail -f ~/.po0fw/po0fw.log
 ```
 
-脚本平时是安静的：只有**出口 IP 或加白状态发生变化**、或者**有失败**时才写日志。所以日志一直没新内容通常是好事。
+```powershell
+# Windows
+C:\po0fw\po0fw.ps1 -Show
+Get-Content C:\ProgramData\po0fw\po0fw.log -Tail 20 -Wait
+```
+
+**脚本平时是安静的**：只有**出口 IP 或加白状态发生变化**、或者**有失败**时才写日志。所以日志一直没新内容通常是好事，不代表没在跑。
+
+### 共通
 
 | 现象 | 多半是 |
 |---|---|
-| `❌ 请求失败: curl: (60) SSL certificate problem` | 证书校验，见「TLS 三档」 |
-| `❌ 请求失败: curl: (28) timed out` | API 不可达。若在 TUN 模式下，多半是漏了 DIRECT 规则 |
-| `❌ 加白未生效` | 请求通了但没写进白名单，检查服务端防火墙是否启用 |
-| `❌ 槽位冲突` | 本机 IP 已占用别的槽位——多半是多台设备都钉了槽位，见「槽位策略」 |
-| `❌ HTTP 401/404` | token 错了 |
-| launchd 不跑 | `launchctl print gui/$(id -u)/com.po0fw.whitelist` 看是否注册；`/tmp/po0fw.err.log` 看有没有报错 |
-| Termux 任务不跑 | `termux-job-scheduler -p` 看任务在不在；确认已关掉电池优化 |
+| 请求超时 / 不可达 | API 不可达。**若这台机器跑着 Clash 且开了 TUN，最常见的原因是漏了 DIRECT 规则**，见「Clash 规则覆写」 |
+| SSL / 证书错误 | 见「TLS 三档」——先试 `pinned` |
+| `加白未生效` | 请求通了但没写进白名单，检查服务端防火墙是否启用 |
+| `槽位冲突` / HTTP 403 | 本机 IP 已占用别的槽位——多半是**多台设备都钉了槽位**，见「槽位策略」 |
+| HTTP 401 / 404 | token 错了 |
+
+### 按平台
+
+| 现象 | 怎么查 |
+|---|---|
+| Windows：`LastTaskResult` = 1 | 上报失败。看 `C:\ProgramData\po0fw\po0fw.log` 末尾几行，再对照上表 |
+| Windows：`LastTaskResult` = 2 | 配置错误（没填 token、`tls` 拼错、`pinned` 没配 `pin`）。手动跑 `.\po0fw.ps1 -Show` 会直接打印原因 |
+| Windows：任务不跑 | `Get-ScheduledTask -TaskName 'po0fw-whitelist'` 看是否注册且 `State` 为 `Ready`；`Get-ScheduledTaskInfo` 看 `LastRunTime` |
+| Windows：`irm` 下载报错 | 公司网络或代理拦截，换浏览器手动下载这三个文件到 `C:\po0fw\` |
+| macOS：launchd 不跑 | `launchctl print gui/$(id -u)/com.po0fw.whitelist` 看是否注册；`/tmp/po0fw.err.log` 看有没有报错 |
+| Android：Termux 任务不跑 | `termux-job-scheduler -p` 看任务在不在；确认已给 Termux 关掉电池优化 |
