@@ -12,11 +12,43 @@
  *   （ctx.env.tokens），可带 @槽位 后缀（pgnfw_xxx@0）钉固定坑位。
  * 加白粒度为 C 段（/24）：服务端把 whitelist 条目和 currentIp 归一化成
  *   x.x.x.0/24 回显，同段换 IP 不产生新写入；匹配用 sameC24() 兼容混杂格式。
+ *
+ * 健壮性（针对 network 触发，切网瞬间在途连接会被掐断）：
+ *   请求带硬超时、传输失败退避重试、每个 token 独立成败，
+ *   与共享脚本 scripts/po0-firewall-whitelist.js 保持同一套语义。
  */
 
 const API_BASE = "https://124.221.69.228/api/firewall/"; // + <token> + "/add"
 const STORE_PREFIX = "po0_fw_";
 const HIST_WINDOW_MS = 24 * 3600 * 1000; // 📶 标记的记账窗口
+
+// 时序预算，需装进 yaml 里的 timeout: 60
+// 稳定等待 2s + 3 次尝试 × 12s + 退避 2s、4s = 最坏 44s
+const SETTLE_DELAY_MS = 2000; // 网络变化后先让接口稳定，避免第一发就撞上切网
+const REQ_TIMEOUT_MS = 12000; // 单次请求硬超时
+const MAX_ATTEMPTS = 3; // 含首次，传输失败最多试这么多次
+const RETRY_BASE_MS = 2000; // 第 n 次失败后等 n × 该值
+
+function delay(ms) {
+  return new Promise(function (resolve) {
+    if (typeof setTimeout === "function" && ms > 0) setTimeout(resolve, ms);
+    else resolve();
+  });
+}
+
+// ctx.http 不认 timeout 或底层连接被切网掐断时，用这道兜底自行了结，
+// 避免整个脚本吊死到被 Egern 的 timeout 杀掉（那样没有任何提示）。
+function withTimeout(promise, ms) {
+  if (typeof setTimeout !== "function") return promise;
+  return Promise.race([
+    promise,
+    new Promise(function (_, reject) {
+      setTimeout(function () {
+        reject(new Error("请求超时（" + Math.round(ms / 1000) + "s 无响应）"));
+      }, ms);
+    }),
+  ]);
+}
 
 // tokens 分隔符兼容 , | ; 、 空白；每段可带 @槽位 后缀
 function parseTokens(raw) {
@@ -69,11 +101,14 @@ async function apiCall(ctx, token, slot) {
   }
   let resp;
   try {
-    resp = await ctx.http.post(url, {
-      headers: { "Content-Type": "application/json" },
-      body: "",
-      timeout: 15000,
-    });
+    resp = await withTimeout(
+      ctx.http.post(url, {
+        headers: { "Content-Type": "application/json" },
+        body: "",
+        timeout: 10000,
+      }),
+      REQ_TIMEOUT_MS
+    );
   } catch (e) {
     return { error: String((e && e.message) || e) };
   }
@@ -128,19 +163,46 @@ function sameC24(a, b) {
   );
 }
 
+// 只对传输层失败重试：切网瞬间第一发常被掐断，退避后往往就落在已稳定的接口上。
+// 服务端给出的明确答复（含 403 槽位冲突）重试没有意义。
+async function apiCallWithRetry(ctx, token, slot) {
+  let r = await apiCall(ctx, token, slot);
+  for (let attempt = 1; attempt < MAX_ATTEMPTS && r.error && !r.conflict; attempt++) {
+    await delay(RETRY_BASE_MS * attempt);
+    r = await apiCall(ctx, token, slot);
+  }
+  return r;
+}
+
 async function ensure(ctx, item, index, cellular) {
   const kvState = STORE_PREFIX + index;
   const kvHist = STORE_PREFIX + "hist_" + index;
-  const st = await apiCall(ctx, item.token, item.slot);
+  const st = await apiCallWithRetry(ctx, item.token, item.slot);
   if (st.applied) {
     const hist = readHistory(ctx, kvHist);
     const last = hist.length ? hist[hist.length - 1] : null;
     if (!last || last.ip !== st.currentIp) {
       hist.push({ ip: st.currentIp, src: cellular ? "cell" : "fixed", ts: Date.now() });
-      ctx.storage.setJSON(kvHist, hist.slice(-10));
+      try {
+        ctx.storage.setJSON(kvHist, hist.slice(-10));
+      } catch (e) {}
     }
   }
   return { kvState: kvState, kvHist: kvHist, slot: item.slot, st: st };
+}
+
+// 每个 token 独立成败：一个 token 抛异常不该拖垮其它 token 的结果上报。
+async function safeEnsure(ctx, item, index, cellular) {
+  try {
+    return await ensure(ctx, item, index, cellular);
+  } catch (e) {
+    return {
+      kvState: STORE_PREFIX + index,
+      kvHist: STORE_PREFIX + "hist_" + index,
+      slot: item.slot,
+      st: { error: "脚本异常: " + String((e && e.message) || e) },
+    };
+  }
 }
 
 // 每 token 一行：不含 token，只含白名单/坑位信息；钉住的槽位标 📌，蜂窝加的 IP 标 📶
@@ -179,10 +241,14 @@ export default async function (ctx) {
   }
 
   const cellular = onCellular(ctx);
-  const results = [];
-  for (let i = 0; i < tokens.length; i++) {
-    results.push(await ensure(ctx, tokens[i], i, cellular));
-  }
+  // 网络变化触发时，等接口稳定下来再发第一发
+  await delay(SETTLE_DELAY_MS);
+  // 并发跑：串行的话多 token 的重试预算会叠加，可能撑爆载体的 timeout
+  const results = await Promise.all(
+    tokens.map(function (t, i) {
+      return safeEnsure(ctx, t, i, cellular);
+    })
+  );
 
   let okCount = 0;
   let exitIp = "?";
@@ -195,10 +261,12 @@ export default async function (ctx) {
     lines.push(describe(ctx, i, results[i]));
 
     const state = (st.currentIp || "?") + "|" + (st.applied ? "1" : "0");
-    if (ctx.storage.get(results[i].kvState) !== state) {
-      ctx.storage.set(results[i].kvState, state);
-      changed = true;
-    }
+    try {
+      if (ctx.storage.get(results[i].kvState) !== state) {
+        ctx.storage.set(results[i].kvState, state);
+        changed = true;
+      }
+    } catch (e) {}
   }
 
   const title =
