@@ -1,0 +1,3 @@
+# shell 版的实际配置里有 token，只提交 .example 模板
+clash/po0fw.conf
+clash/*.log
