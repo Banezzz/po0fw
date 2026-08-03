@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  po0 防火墙自动加白 · macOS LaunchAgent 模板
+
+  安装前必须把 __PO0FW_DIR__ 换成 po0fw.sh 的实际所在目录（绝对路径，
+  launchd 不展开 ~ 和 $HOME）。clash/README.md 里给了 sed 一键替换命令。
+
+  作为 LaunchAgent（放 ~/Library/LaunchAgents/）以当前用户身份运行，
+  脚本读得到 $HOME，状态与日志默认落在 ~/.po0fw/。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.po0fw.whitelist</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PO0FW_DIR__/po0fw.sh</string>
+  </array>
+
+  <!-- 每 10 分钟跑一次。Mac 睡眠时不触发，唤醒后补跑一次。 -->
+  <key>StartInterval</key>
+  <integer>600</integer>
+
+  <!-- 加载时立刻跑一次（开机 / 登录 / 重新 bootstrap） -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!--
+    网络变化的等效触发：切换 WiFi、重新拨号、拿到新 DHCP 租约时，
+    这几个路径会被系统重写。相当于 Surge 的 network-changed 事件。
+  -->
+  <key>WatchPaths</key>
+  <array>
+    <string>/etc/resolv.conf</string>
+    <string>/private/var/run/resolv.conf</string>
+    <string>/Library/Preferences/SystemConfiguration</string>
+  </array>
+
+  <!-- 网络抖动时 WatchPaths 会连续触发，限流避免短时间内反复跑 -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <!-- 脚本平时不输出（只在状态变化或失败时写自己的日志），这两个文件通常是空的 -->
+  <key>StandardOutPath</key>
+  <string>/tmp/po0fw.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/po0fw.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
