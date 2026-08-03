@@ -30,6 +30,8 @@ Surge/Loon/Stash/Shadowrocket/Quantumult X 共用 `scripts/po0-firewall-whitelis
 
 一键安装入口见教程页 <https://po0fw.rlyio.com/>。token 只保存在你自己的客户端配置里，本仓库不包含、不上传任何 token。
 
+> **给 Shadowrocket 改模块的人注意**：不要往 `.srmodule` 里加 `type=generic` 脚本或 `[Panel]` 段。两者都是 Surge 的概念，Shadowrocket 遇到不认识的脚本类型会让**整个 `[Script]` 段失效**，cron 与 event 一起不注册。故障表现是脚本完全不被派发——PacketTunnel 日志里一行 `script` 都没有，比脚本卡死更难排查。Shadowrocket 上想手动触发，切换一次网络即可（会触发 `network-changed`）。
+
 ## Clash 系（Clash Verge Rev / FlClash）
 
 **做不成模块**：两者共用的 mihomo 内核没有 cron / event 脚本这个扩展点（Verge Rev 的「Script」和 FlClash 的「覆写」都只是生成配置时跑一次的配置变换，没有网络与定时能力）。
