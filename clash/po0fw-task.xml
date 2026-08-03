@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0"?>
 <!--
   po0 firewall auto-whitelist - Windows Task Scheduler template.
 
@@ -9,6 +9,13 @@
   Deliberately ASCII-only: schtasks.exe /XML is picky about file encoding,
   and non-ASCII text here is a common source of import failures. All the
   Chinese documentation lives in clash/README.md instead.
+
+  The XML declaration deliberately carries NO encoding attribute. Get-Content
+  hands Register-ScheduledTask a .NET string, which is UTF-16 in memory; if the
+  declaration claimed UTF-8, the Task Scheduler parser rejects it with
+  "The task XML is malformed / cannot switch encoding" at (1,40). Omitting the
+  attribute keeps this file valid both as a UTF-8 file on disk (schtasks /XML,
+  GUI import) and as an in-memory string (Register-ScheduledTask -Xml).
 
   Triggers:
     - every 10 minutes, indefinitely

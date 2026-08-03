@@ -187,6 +187,11 @@ $xml = (Get-Content C:\po0fw\po0fw-task.xml -Raw) -replace '__PO0FW_DIR__', 'C:\
 Register-ScheduledTask -TaskName 'po0fw-whitelist' -Xml $xml -Force
 ```
 
+> 若报 `The task XML is malformed` / `无法切换编码 (1,40)`，说明你手里的模板还是旧版
+> （XML 声明里带 `encoding="UTF-8"`）。`Get-Content -Raw` 给出的是 .NET 字符串，
+> 内存里是 UTF-16，和声明里写的 UTF-8 对不上。重新下载 `po0fw-task.xml` 即可，
+> 或临时在上面那行末尾追加 `` -replace ' encoding="UTF-8"','' ``。
+
 ### 第 5 步：验证
 
 ```powershell
