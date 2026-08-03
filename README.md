@@ -29,3 +29,11 @@
 Surge/Loon/Stash/Shadowrocket/Quantumult X 共用 `scripts/po0-firewall-whitelist.js`，内置环境兼容层（`$httpClient`/`$task.fetch`、`$persistentStore`/`$prefs`、`$notification`/`$notify`）。不支持 `$network` 的客户端按非蜂窝处理；不支持面板的客户端仅少一个手动刷新入口。**Egern** 运行模型不同（`export default async function(ctx)`，无 `$` 全局），用独立的 `egern/po0-firewall-whitelist.js`（`ctx.http`/`ctx.storage`/`ctx.notify`/`ctx.env`/`ctx.device`），业务逻辑与共享脚本一致。
 
 一键安装入口见教程页 <https://po0fw.rlyio.com/>。token 只保存在你自己的客户端配置里，本仓库不包含、不上传任何 token。
+
+## Clash 系（Clash Verge Rev / FlClash）
+
+**做不成模块**：两者共用的 mihomo 内核没有 cron / event 脚本这个扩展点（Verge Rev 的「Script」和 FlClash 的「覆写」都只是生成配置时跑一次的配置变换，没有网络与定时能力）。
+
+改用系统调度器跑 [`clash/po0fw.sh`](./clash/po0fw.sh)（POSIX sh，只依赖 `curl`，busybox 可跑）。又因为服务端按 C 段（/24）加白，**同一出口 IP 下只需一台设备上报**——在常开设备（软路由 / NAS / 树莓派）上挂一条 10 分钟 cron，同 WAN 出口下的所有机器就都被覆盖了，只有蜂窝上网的手机需要自己上报。
+
+安装、TLS 证书处理、Clash 规则覆写与 Android 方案见 [`clash/README.md`](./clash/README.md)。

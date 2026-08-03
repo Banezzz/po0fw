@@ -1,0 +1,35 @@
+# po0fw shell 版配置。复制成 po0fw.conf 后填写。
+# po0fw.conf 里有 token，别提交进 git（仓库的 .gitignore 已经挡了）。
+
+# ── 必填 ─────────────────────────────────────────────────────────────
+# pgnfw_ token，多台机器用逗号或竖杠分割。
+# 可选在 token 后加 @槽位（如 pgnfw_xxx@0）把本机 IP 钉在该坑位、永不被
+# LRU 淘汰。白名单只有 5 个坑位且写满按写入时间 FIFO 淘汰，设备一多就会
+# 互相挤，稳定出口强烈建议钉死。
+PO0FW_TOKENS="pgnfw_第一台@0,pgnfw_第二台@1"
+
+# ── TLS ──────────────────────────────────────────────────────────────
+# API 是裸 IP 的 HTTPS，多半没有能过 CA 校验的证书。三选一：
+#
+#   strict    正常校验。先试这个：
+#               curl -sS -o /dev/null -w '%{http_code}\n' https://124.221.69.228/
+#             不报证书错就用 strict，保持默认即可。
+#
+#   pinned    跳过证书链校验，但钉住服务端公钥指纹。**推荐**——自签证书
+#             同样能挡住中间人。跑 ./po0fw.sh --pin 会直接打印下面两行：
+#               PO0FW_TLS="pinned"
+#               PO0FW_PIN="sha256//xxxxxxxx..."
+#             注意服务端换证书后指纹会变，届时重新跑一次 --pin。
+#
+#   insecure  完全不校验。token 是放在 URL 路径里的，关掉校验等于把 token
+#             暴露给中间人。只在前两种都不可行时用。
+PO0FW_TLS="strict"
+#PO0FW_PIN="sha256//替换成 --pin 输出的值"
+
+# ── 可选 ─────────────────────────────────────────────────────────────
+#PO0FW_API="https://124.221.69.228/api/firewall"
+#PO0FW_STATE_DIR="$HOME/.po0fw"     # 状态与日志目录
+#PO0FW_LOG="$HOME/.po0fw/po0fw.log"
+#PO0FW_TIMEOUT=12                   # 单次请求超时（秒）
+#PO0FW_MAX_ATTEMPTS=3               # 含首次，传输失败最多试几次
+#PO0FW_RETRY_BASE=2                 # 第 n 次失败后等 n × 该值（秒）
