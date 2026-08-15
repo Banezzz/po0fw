@@ -47,7 +47,7 @@ Surge/Loon/Stash/Shadowrocket/Quantumult X 共用 `scripts/po0-firewall-whitelis
 
 零售消费级路由器（无 SSH / 无 cron / busybox `wget` 常不支持 HTTPS）基本做不了，别耗时间；开放固件的软路由没问题。
 
-安装、TLS 证书处理与 Clash 规则覆写见 [`clash/README.md`](./clash/README.md)。
+安装、TLS 证书处理、MacroDroid 点击步骤与 Clash 规则覆写见 [`clash/README.md`](./clash/README.md)。图文版在教程页 <https://po0fw.rlyio.com/#clash>。
 
 ### 槽位策略：只让一台设备钉
 

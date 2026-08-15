@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>po0 防火墙自动加白 · po0fw</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%9B%A1%EF%B8%8F%3C/text%3E%3C/svg%3E">
-<meta name="description" content="自动把设备当前出口 IP 加入 po0 防火墙白名单。支持 Surge / Loon / Stash / Shadowrocket / Egern / Quantumult X。">
+<meta name="description" content="自动把设备当前出口 IP 加入 po0 防火墙白名单。支持 Surge / Loon / Stash / Shadowrocket / Egern / Quantumult X，以及 Clash Verge / FlClash（macOS / Windows / Android + MacroDroid）。">
 <style>
 :root{
   --vp-bg:#ffffff; --vp-bg-soft:#f6f6f7; --vp-bg-alt:#f9fafb;
@@ -115,6 +115,14 @@ td:last-child,th:last-child{white-space:normal}
   border-radius:8px;padding:0 12px;height:34px;cursor:pointer;font-size:13px;flex:none;
 }
 .client .note{font-size:12.5px;color:var(--vp-muted);line-height:1.55}
+.client .badge.emoji{
+  display:flex;align-items:center;justify-content:center;
+  background:var(--vp-bg);border:1px solid var(--vp-divider);
+  font-size:20px;box-shadow:none;
+}
+.steps{padding-left:1.3em;margin:10px 0}
+.steps li{margin:10px 0}
+.steps li ul{margin:6px 0}
 
 /* po0 面板示意图 */
 .mock{display:flex;justify-content:center;margin:18px 0}
@@ -149,12 +157,13 @@ footer{
   <p class="tagline">自动把设备当前出口 IP 加入 po0 防火墙白名单 —— 多机器、多客户端、蜂窝优化、坑位记账。</p>
   <div class="actions">
     <a class="btn brand" href="#install">快速开始 →</a>
+    <a class="btn alt" href="#clash">Clash / 电脑 / 安卓</a>
     <a class="btn alt" href="https://github.com/Banezzz/po0fw">GitHub</a>
   </div>
 </div>
 
 <div class="features">
-  <div class="feature"><div class="icon">📱</div><h3>六大客户端</h3><p>Surge、Loon、Stash、Shadowrocket、Egern、Quantumult X，同一份脚本内置环境兼容层。</p></div>
+  <div class="feature"><div class="icon">📱</div><h3>手机 + 电脑</h3><p>Surge / Loon / Stash / Shadowrocket / Egern / Quantumult X 一键装模块；Clash 系用系统调度器，macOS / Windows / Android 都能报。</p></div>
   <div class="feature"><div class="icon">⚡</div><h3>即时 + 兜底</h3><p>切换网络瞬间通过 network-changed 事件触发，每 10 分钟 cron 兜底捕捉纯 IP 变更。</p></div>
   <div class="feature"><div class="icon">🎯</div><h3>无脑 POST</h3><p>每次直接上报出口 IP，服务端对重复 IP 幂等去重。写满按写入时间自动淘汰最旧 IP。</p></div>
   <div class="feature"><div class="icon">🔄</div><h3>自动自愈</h3><p>被 FIFO 淘汰挤出白名单的设备，由自己的 cron / 切网事件在几分钟内自动补回。</p></div>
@@ -262,6 +271,29 @@ footer{
       <p class="note">安装后在模块参数 <code>tokens</code> 填入 token（多台机器用英文逗号分割）。每 10 分钟及网络变化时自动加白。</p>
     </div>
 
+    <div class="client">
+      <div class="head">
+        <span class="badge emoji" aria-hidden="true">🖥️</span>
+        <div><b>Clash Verge / FlClash</b><span>Mac / Windows · 系统调度器</span></div>
+      </div>
+      <div class="install">
+        <a class="btn brand" href="#clash-mac">macOS 指南</a>
+        <a class="btn alt" href="#clash-win">Windows 指南</a>
+      </div>
+      <p class="note">mihomo 没有 cron / 脚本扩展点，做不成模块。本机跑 <code>po0fw.sh</code> / <code>po0fw.ps1</code>，launchd 或任务计划定时 + 切网触发。须先加 DIRECT 规则。</p>
+    </div>
+
+    <div class="client">
+      <div class="head">
+        <span class="badge emoji" aria-hidden="true">🤖</span>
+        <div><b>Android · FlClash</b><span>Termux 上报 + MacroDroid 切网</span></div>
+      </div>
+      <div class="install">
+        <a class="btn brand" href="#clash-android">打开安卓指南</a>
+      </div>
+      <p class="note">蜂窝出口家里那台覆盖不了。Termux 里跑同一份脚本（通知跟 Shadowrocket 一样：变了才弹）；MacroDroid 只负责切网时点一下，不用写代码。</p>
+    </div>
+
   </div>
 
   <div class="tip">
@@ -283,13 +315,118 @@ footer{
   </table>
 </section>
 
+<section id="clash">
+  <h2>Clash 系 · Mac / Windows / Android</h2>
+  <p><strong>做不成模块。</strong> Clash Verge Rev 和 FlClash 共用 mihomo 内核，没有 cron / 网络变化脚本这个插孔。改由系统调度器跑同一句 <code>POST /api/firewall/&lt;token&gt;/add</code>。服务端按 C 段（/24）加白，<strong>同一个出口只需一台设备上报</strong>。</p>
+  <div class="tip warn"><strong>TUN 开着时必须先加 DIRECT。</strong> 系统流量全进 mihomo，<code>curl --noproxy</code> 绕不开。漏了这一步脚本会显示成功，但服务端看到的是代理出口 IP，等于白加。</div>
+  <pre><code>prepend-rules:
+  - IP-CIDR,124.221.69.228/32,DIRECT,no-resolve</code></pre>
+  <ul>
+    <li><strong>Clash Verge Rev</strong>：订阅 → 全局扩展配置（Merge）→ 粘进去。写在这里订阅更新冲不掉。Verge 2.x 若当前是 <code>mode: global</code>，规则本身不走，还要让脚本/TUN 把这个 IP 排除出隧道（macOS 安装说明里有）。</li>
+    <li><strong>FlClash</strong>：设置 → 覆写 → 规则，直接追加那条 <code>IP-CIDR</code>（不用 <code>prepend-rules</code> 包装）。</li>
+  </ul>
+  <p>会出门的笔记本 / 手机<strong>不要加 <code>@槽位</code></strong>。白名单只有 5 个坑，只让一台始终在家的设备钉槽；出门设备钉了，家里 WAN 会被挤掉。</p>
+  <p>通知默认打开，跟 Shadowrocket 同一套：<strong>只在出口 IP 或加白状态变了才弹</strong>，例行定时保持安静。标题是 <code>po0 防火墙加白</code>。</p>
+
+  <h3 id="clash-mac">macOS（launchd）</h3>
+  <pre><code>mkdir -p ~/.po0fw &amp;&amp; cd ~/.po0fw
+curl -fsSL -o po0fw.sh        https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.sh
+curl -fsSL -o po0fw.notify.sh https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.notify.sh
+curl -fsSL -o po0fw.conf      https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.conf.example
+chmod +x po0fw.sh
+# 编辑 po0fw.conf，填 PO0FW_TOKENS（出门的本子不要加 @）
+./po0fw.sh -v
+
+curl -fsSL https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/com.po0fw.whitelist.plist \
+  | sed "s|__PO0FW_DIR__|$HOME/.po0fw|g" &gt; ~/Library/LaunchAgents/com.po0fw.whitelist.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.po0fw.whitelist.plist</code></pre>
+  <p>登录立刻跑、每 10 分钟、切 WiFi / 换 DHCP 自动触发。睡眠期间不跑，唤醒后补一次。证书报错就 <code>./po0fw.sh --pin</code>，把两行贴进 <code>po0fw.conf</code>。</p>
+
+  <h3 id="clash-win">Windows（任务计划程序）</h3>
+  <p>用管理员 PowerShell。常住家里的那台加 <code>@0</code> 钉槽。</p>
+  <pre><code>mkdir C:\po0fw ; cd C:\po0fw
+irm https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.ps1          -OutFile po0fw.ps1
+irm https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.json.example -OutFile po0fw.json
+irm https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw-task.xml     -OutFile po0fw-task.xml
+notepad C:\po0fw\po0fw.json          # tokens 填 pgnfw_A@0|pgnfw_B@0
+.\po0fw.ps1 -Show                    # 先手动跑通；证书错就 -ShowPin
+$xml = (Get-Content C:\po0fw\po0fw-task.xml -Raw) -replace '__PO0FW_DIR__', 'C:\po0fw'
+Register-ScheduledTask -TaskName 'po0fw-whitelist' -Xml $xml -Force</code></pre>
+  <p>任务每 10 分钟 + 开机 + 网络已连接。以 SYSTEM 跑，不闪黑框；通知会走 <code>msg.exe</code> 会话消息（toast 到不了当前用户）。<code>notify</code> 默认 <code>change</code>。</p>
+
+  <h3 id="clash-android">Android（Termux 上报 + MacroDroid 切网）</h3>
+  <p>蜂窝出口家里那台覆盖不了，手机要自己报。上报和通知放在 Termux 的 <code>po0fw.sh</code> 里（TLS 完整，通知跟 Shadowrocket 一样：变了才弹）。<strong>MacroDroid 只负责切网时把脚本喊起来</strong>——全程在 APP 里点，不用写代码，也不要让它自己发 HTTP。</p>
+
+  <h3>第 0 步：装 APP</h3>
+  <p>Termux 三个必须<strong>同一个源</strong>（F-Droid 或 GitHub，别混、别用 Play 商店版 Termux）。MacroDroid 随便装。</p>
+  <table>
+    <tr><th>APP</th><th>干什么</th><th>F-Droid</th></tr>
+    <tr><td>Termux</td><td>跑脚本</td><td><a href="https://f-droid.org/packages/com.termux/">com.termux</a></td></tr>
+    <tr><td>Termux:API</td><td>通知栏</td><td><a href="https://f-droid.org/packages/com.termux.api/">com.termux.api</a></td></tr>
+    <tr><td>Termux:Tasker</td><td>给 MacroDroid 当插件</td><td><a href="https://f-droid.org/packages/com.termux.tasker/">com.termux.tasker</a></td></tr>
+    <tr><td>MacroDroid</td><td>盯切网</td><td>官网 / 应用商店</td></tr>
+  </table>
+  <p>GitHub 版：<a href="https://github.com/termux/termux-app/releases">termux-app</a> · <a href="https://github.com/termux/termux-api/releases">termux-api</a> · <a href="https://github.com/termux/termux-tasker/releases">termux-tasker</a>。MacroDroid：<a href="https://www.macrodroid.com/">macrodroid.com</a>。</p>
+  <div class="tip warn">三个 Termux APP 签名必须一致。混装的话 <code>termux-*</code> 命令会<strong>静默卡住、零报错</strong>。先验 <code>termux-battery-status</code>，打出 JSON 才算通。</div>
+
+  <h3>第 1 步：Termux 一段粘贴</h3>
+  <p><strong>先关 WiFi 切到移动数据</strong>，才能看到蜂窝出口。把 token 换掉，整段粘进 Termux。手机不要加 <code>@槽位</code>。</p>
+  <pre><code>pkg update -y &amp;&amp; pkg upgrade -y &amp;&amp; pkg install -y curl termux-api
+curl -fsSL -o ~/po0fw.sh        https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.sh
+curl -fsSL -o ~/po0fw.notify.sh https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.notify.sh
+chmod +x ~/po0fw.sh
+cat &gt; ~/po0fw.conf &lt;&lt;'EOF'
+PO0FW_TOKENS="pgnfw_你的第一个|pgnfw_你的第二个"
+PO0FW_TLS="strict"
+PO0FW_NOTIFY="change"
+EOF
+chmod 600 ~/po0fw.conf
+~/po0fw.sh -v
+
+mkdir -p ~/.termux ~/.termux/tasker
+grep -q '^allow-external-apps' ~/.termux/termux.properties 2&gt;/dev/null \
+  || echo 'allow-external-apps = true' &gt;&gt; ~/.termux/termux.properties
+ln -sfn ~/po0fw.sh        ~/.termux/tasker/po0fw.sh
+ln -sfn ~/po0fw.conf      ~/.termux/tasker/po0fw.conf
+ln -sfn ~/po0fw.notify.sh ~/.termux/tasker/po0fw.notify.sh
+termux-reload-settings</code></pre>
+  <div class="tip"><strong><code>pkg upgrade</code> 不能省。</strong> 只 <code>update</code> 再装 curl，会和新旧 openssl 对不上，后面全是 <code>No such file</code>。已经踩了跑 <code>pkg upgrade -y</code>。</div>
+  <p>看输出的出口 IP：运营商蜂窝段才对；家里宽带 = WiFi 没关干净；代理段 = FlClash 漏了 DIRECT。</p>
+
+  <h3>第 2 步：MacroDroid 里点（不用写代码）</h3>
+  <p>中文界面如下，英文名写在括号里。</p>
+  <ol class="steps">
+    <li>打开 <strong>MacroDroid</strong> → 右下角 <strong>+</strong>，宏名字 <code>po0 切网加白</code>。</li>
+    <li><strong>触发器（Triggers）</strong> → <strong>+</strong> → <strong>连接（Connectivity）</strong> → <strong>网络类型变化（Network Type Change）</strong>。
+      <ul>
+        <li>勾选 <strong>WiFi</strong> 和 <strong>移动数据 / Cellular</strong>。</li>
+        <li><strong>不要</strong>勾「无连接 / None」，否则飞行模式也会空跑。</li>
+      </ul>
+    </li>
+    <li><strong>动作（Actions）</strong> → <strong>+</strong> → <strong>插件（Plugins）</strong> → <strong>Termux</strong>（没这项 = Termux:Tasker 没装或不同源）。
+      <ul>
+        <li><strong>Executable</strong> 选 <code>po0fw.sh</code></li>
+        <li>参数、工作目录留空</li>
+        <li><strong>不要</strong>勾「在终端里打开 / Open in terminal」</li>
+        <li>Wait for result 不勾也行</li>
+      </ul>
+    </li>
+    <li>保存宏，打开开关。第一次会问「允许 MacroDroid 在 Termux 里跑命令」——允许。</li>
+    <li>同一个宏再加一个触发器（定时兜底）：<strong>日期/时间</strong> → <strong>间隔定时器（Regular Interval）</strong> → <strong>15 分钟</strong>。</li>
+  </ol>
+  <p>系统权限：<strong>Termux</strong> 和 <strong>MacroDroid</strong> 电池都设「无限制」；Android 13+ 给 <strong>Termux:API</strong> 开通知。切一次 WiFi ↔ 流量，通知栏应出现 <code>po0 防火墙加白</code>。同一出口再跑不会刷。</p>
+  <div class="tip warn"><strong>不要让 MacroDroid 自己 POST。</strong> 它过不了裸 IP 证书，只能勾「忽略 SSL」，token 在 URL 里等于明文。切网用 MacroDroid，上报和通知留在 Termux。</div>
+
+  <p>更细的排错、Windows toast 限制、launchd 重载见仓库 <a href="https://github.com/Banezzz/po0fw/blob/main/clash/README.md">clash/README.md</a>。</p>
+</section>
+
 <section>
   <h2>设计说明</h2>
   <ul>
     <li><strong>无脑 POST</strong>：每次直接 POST 上报当前出口 IP，服务端对已在白名单的 IP 做幂等处理（不重复占坑、不推进淘汰队列），无需客户端先 GET 查询。白名单上限 5 个，写满按写入时间先进先出淘汰。</li>
     <li><strong>C 段加白</strong>：服务端按 /24 网段加白并回显（如 <code>203.0.113.0/24</code>），同段内换 IP 不消耗新坑位、不推进淘汰，家宽拨号重连通常不产生新写入。</li>
     <li><strong>自愈</strong>：每台设备都在自动检查，就算某台设备的 IP 被淘汰挤出白名单，它自己的 cron/切网事件最迟 10 分钟内会自动补回。</li>
-    <li><strong>安静运行</strong>：状态用持久化存储记账，只在失败、限频或消耗新坑位时才推送通知。</li>
+    <li><strong>安静运行</strong>：状态用持久化存储记账，只在出口 IP / 加白状态变化、失败或没配 token 时才推送通知（Shadowrocket、macOS、Windows、Android 同一套）。</li>
     <li><strong>隐私</strong>：面板不显示 token；token 只保存在你自己的客户端配置里，仓库与页面不包含、不上传任何 token。</li>
   </ul>
   <div class="tip warn">
@@ -300,13 +437,15 @@ footer{
 <section>
   <h2>FAQ</h2>
   <p><strong>Q: 走代理时会把代理服务器 IP 加白吗？</strong><br>
-  不会。各载体都自带加白 API（<code>124.221.69.228</code>）直连规则，API 请求始终直连，看到的是设备真实出口 IP。</p>
+  模块客户端（Surge 等）自带加白 API（<code>124.221.69.228</code>）直连规则。Clash 系 TUN 开着时必须自己加那条 <code>IP-CIDR … DIRECT</code>，否则服务端看到的是代理 IP。</p>
   <p><strong>Q: 家宽换 IP 后多久生效？</strong><br>
-  网络切换事件是即时的；纯粹的公网 IP 变更最迟 10 分钟内被 cron 捕捉。</p>
+  网络切换事件是即时的；纯粹的公网 IP 变更最迟 10 分钟内被 cron / launchd / 任务计划捕捉。Android + MacroDroid 切网即时，定时兜底 15 分钟。</p>
   <p><strong>Q: 不同客户端功能有差异吗？</strong><br>
-  核心加白逻辑完全一致。差异：不支持 <code>$network</code> 的客户端没有 📶 蜂窝标记；Loon 无面板（可在脚本列表手动执行）；QX 无面板与脚本参数（token 走存储 key）。</p>
+  核心加白逻辑完全一致。差异：不支持 <code>$network</code> 的客户端没有 📶 蜂窝标记；Loon 无面板（可在脚本列表手动执行）；QX 无面板与脚本参数（token 走存储 key）；Clash 系用系统调度器，不是模块。</p>
   <p><strong>Q: 支持几台 po0 机器？</strong><br>
   不限，tokens 逗号分割即可，面板按 #1 #2 … 分行显示。</p>
+  <p><strong>Q: 安卓为什么不用 MacroDroid 直接发 HTTP？</strong><br>
+  裸 IP 的 HTTPS 证书过不去，只能忽略 SSL，token 在 URL 里等于交给中间人。MacroDroid 只触发 Termux 里的脚本。</p>
 </section>
 
 <footer>
