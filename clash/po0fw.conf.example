@@ -26,12 +26,14 @@ PO0FW_TOKENS="pgnfw_第一台@0,pgnfw_第二台@1"
 PO0FW_TLS="strict"
 #PO0FW_PIN="sha256//替换成 --pin 输出的值"
 
-# ── 通知（macOS 默认打开，跟 Shadowrocket 同一套逻辑）────────────
+# ── 通知（默认打开，跟 Shadowrocket 同一套逻辑）──────────────────
 # change  出口 IP 或加白状态变了才弹；配置错误也弹（默认，等同手机模块）
-# always  每次执行都弹（成功 / 失败）。launchd 每 10 分钟会响一次
+# always  每次执行都弹（成功 / 失败）
 # fail    只失败才弹
 # off     关
-# Linux / Android 无 osascript，设了也是空操作。
+# 后端自动选：macOS=osascript，Android/Termux=termux-notification，
+# Linux 桌面=notify-send（有就用）。Termux 要装 termux-api，并给
+# Termux:API 开通知权限。
 PO0FW_NOTIFY="change"
 
 # ── 可选 ─────────────────────────────────────────────────────────────

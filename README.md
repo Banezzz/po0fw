@@ -43,7 +43,7 @@ Surge/Loon/Stash/Shadowrocket/Quantumult X 共用 `scripts/po0-firewall-whitelis
 | Linux / 软路由 / NAS | [`clash/po0fw.sh`](./clash/po0fw.sh) | `crontab` 每 10 分钟 |
 | Windows | [`clash/po0fw.ps1`](./clash/po0fw.ps1)（PowerShell 5.1 / 7+ 均可） | [`clash/po0fw-task.xml`](./clash/po0fw-task.xml) —— 任务计划程序，每 10 分钟 + 开机 + NetworkProfile 事件 10000（网络已连接） |
 | macOS | `clash/po0fw.sh` | [`clash/com.po0fw.whitelist.plist`](./clash/com.po0fw.whitelist.plist) —— launchd，定时 + `WatchPaths` 网络变化触发 |
-| Android | `clash/po0fw.sh` | Termux + `termux-job-scheduler`（自带完整 TLS 的 `curl`，复用同一脚本） |
+| Android | `clash/po0fw.sh` | Termux 上报 + 通知；MacroDroid 盯切网（点几下即可）；`termux-job-scheduler` / cron 作定时兜底 |
 
 零售消费级路由器（无 SSH / 无 cron / busybox `wget` 常不支持 HTTPS）基本做不了，别耗时间；开放固件的软路由没问题。
 

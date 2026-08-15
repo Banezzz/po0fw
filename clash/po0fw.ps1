@@ -118,6 +118,7 @@ $cfg = @{
   api          = 'https://124.221.69.228/api/firewall'
   tls          = 'strict'      # strict | pinned | insecure
   pin          = ''
+  notify       = 'change'      # change | always | fail | off（默认 change，跟 Shadowrocket 一样）
   timeoutSec   = 12
   maxAttempts  = 3
   retryBaseSec = 2
@@ -160,6 +161,66 @@ function Write-Log {
   $line = "{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
   try { Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8 } catch { }
   if ($Show) { Write-Host $Message }
+}
+
+function Escape-Po0Xml {
+  param([string]$Text)
+  if ($null -eq $Text) { return '' }
+  ($Text -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' -replace '"', '&quot;')
+}
+
+# 跟 Shadowrocket / macOS 同一套：默认 change，只在出口/状态变了或配置错误时弹。
+# 任务计划以 SYSTEM 跑时，WinRT toast 到不了当前用户，会退到 msg.exe。
+function Show-Po0Notify {
+  param(
+    [string]$Status,
+    [string]$Subtitle,
+    [string]$Body = '',
+    [bool]$StateChanged = $false
+  )
+
+  $mode = [string]$cfg.notify
+  if (-not $mode) { $mode = 'change' }
+  switch -Regex ($mode.ToLowerInvariant()) {
+    '^(1|true|yes|on|always)$' { }
+    '^fail$' { if ($Status -eq 'ok') { return } }
+    '^change$' {
+      if ($Status -eq 'error') { }
+      elseif (-not $StateChanged) { return }
+    }
+    default { return }
+  }
+
+  $title = 'po0 防火墙加白'
+  $subtitle = if ($Subtitle) { ($Subtitle -replace '\s+', ' ').Trim() } else { $title }
+  $body = if ($Body) { $Body.Trim() } else { '' }
+  $text = if ($body) { "$subtitle`n$body" } else { $subtitle }
+
+  $toastOk = $false
+  try {
+    [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+    [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] | Out-Null
+    $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+    $xmlText = @"
+<toast><visual><binding template="ToastGeneric"><text>$(Escape-Po0Xml $title)</text><text>$(Escape-Po0Xml $subtitle)</text><text>$(Escape-Po0Xml $body)</text></binding></visual></toast>
+"@
+    $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+    $xml.LoadXml($xmlText)
+    $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
+    $toastOk = $true
+  } catch { }
+
+  if (-not $toastOk) {
+    try {
+      $msg = Get-Command msg.exe -ErrorAction SilentlyContinue
+      if ($msg) {
+        $oneLine = ($text -replace '[\r\n]+', ' ')
+        if ($oneLine.Length -gt 240) { $oneLine = $oneLine.Substring(0, 240) }
+        & $msg.Source '*' /TIME:8 $oneLine 2>$null | Out-Null
+      }
+    } catch { }
+  }
 }
 
 # 日志别无限长：超过 256KB 就只留最后 200 行
@@ -269,19 +330,23 @@ if ($ShowPin) {
 
 if (-not $cfg.tokens) {
   Write-Log "❌ 未配置 token：在 $ConfigPath 的 tokens 字段填入 pgnfw_ token"
+  Show-Po0Notify -Status error -Subtitle '未配置 token' -Body "在 $ConfigPath 的 tokens 字段填入 pgnfw_ token"
   exit 2
 }
 if (@('strict', 'pinned', 'insecure') -notcontains $cfg.tls) {
   Write-Log "❌ tls 只能是 strict / pinned / insecure，当前是 $($cfg.tls)"
+  Show-Po0Notify -Status error -Subtitle 'tls 无效' -Body "只能是 strict / pinned / insecure，当前是 $($cfg.tls)"
   exit 2
 }
 if ($cfg.tls -ne 'strict' -and -not $script:CertTypeReady) {
   Write-Log "❌ tls=$($cfg.tls) 需要内置证书校验器，但它编译失败：$($script:CertTypeError)"
   Write-Log '   可先改用 tls=strict 试试；若确实需要 pinned/insecure，请把上面这条报错发给维护者'
+  Show-Po0Notify -Status error -Subtitle '证书校验器不可用' -Body $script:CertTypeError
   exit 2
 }
 if ($cfg.tls -eq 'pinned' -and -not $cfg.pin) {
   Write-Log '❌ tls=pinned 但没填 pin，先跑 .\po0fw.ps1 -ShowPin'
+  Show-Po0Notify -Status error -Subtitle 'tls=pinned 但没填 pin' -Body '先跑 .\po0fw.ps1 -ShowPin'
   exit 2
 }
 
@@ -291,6 +356,7 @@ if ($cfg.tls -eq 'pinned' -and -not $cfg.pin) {
 $items = @(([string]$cfg.tokens) -split '[,|;\s]+' | Where-Object { $_ -like 'pgnfw_*' })
 if ($items.Count -eq 0) {
   Write-Log '❌ tokens 里没有合法的 pgnfw_ token'
+  Show-Po0Notify -Status error -Subtitle '未配置 token' -Body 'tokens 里没有合法的 pgnfw_ token'
   exit 2
 }
 
@@ -386,4 +452,9 @@ if ($changed -or $okCount -ne $total) {
   Write-Host $detail
 }
 
-if ($okCount -eq $total) { exit 0 } else { exit 1 }
+if ($okCount -eq $total) {
+  Show-Po0Notify -Status ok -Subtitle $summary -Body $detail -StateChanged $changed
+  exit 0
+}
+Show-Po0Notify -Status fail -Subtitle $summary -Body $detail -StateChanged $changed
+exit 1

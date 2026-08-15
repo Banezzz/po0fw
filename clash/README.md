@@ -63,8 +63,9 @@ Clash Verge Rev 和 FlClash 共用 **mihomo（Clash.Meta）** 内核，而 **mih
 
 ```sh
 mkdir -p /opt/po0fw && cd /opt/po0fw
-curl -fsSL -o po0fw.sh   https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.sh
-curl -fsSL -o po0fw.conf https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.conf.example
+curl -fsSL -o po0fw.sh        https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.sh
+curl -fsSL -o po0fw.notify.sh https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.notify.sh
+curl -fsSL -o po0fw.conf      https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.conf.example
 chmod +x po0fw.sh
 
 vi po0fw.conf     # 填 PO0FW_TOKENS
@@ -116,7 +117,7 @@ Mac 睡眠期间不跑，唤醒后补一次。**但因为槽位是钉住的，�
 
 ### 系统通知
 
-macOS 默认打开，逻辑跟 Shadowrocket / Surge 模块一样：**只在出口 IP 或加白状态较上次变化时弹**（第一次成功、切网换了出口、加白失败，都会响）；例行 10 分钟上报保持安静。没配 token 也会弹。
+macOS 默认打开，逻辑跟 Shadowrocket / Surge 模块、以及 Windows / Android 一样：**只在出口 IP 或加白状态较上次变化时弹**（第一次成功、切网换了出口、加白失败，都会响）；例行 10 分钟上报保持安静。没配 token 也会弹。
 
 标题是 `po0 防火墙加白`，和手机上那条一致。
 
@@ -229,6 +230,23 @@ Get-Content C:\ProgramData\po0fw\po0fw.log -Tail 20
 
 最权威的判据还是去 po0 网页面板看白名单里有没有这台的 WAN IP、且带 📌0 标记。
 
+### 系统通知
+
+Windows 默认打开，逻辑跟 Shadowrocket / Surge 模块一样：**只在出口 IP 或加白状态较上次变化时弹**；例行 10 分钟上报保持安静。没配 token 也会弹。标题是 `po0 防火墙加白`。
+
+```json
+"notify": "change"
+```
+
+| 值 | 行为 |
+|---|---|
+| `change` | 出口 IP / 加白状态变了才弹（**默认**，等同手机） |
+| `always` | 每次执行都弹 |
+| `fail` | 只失败才弹 |
+| `off` | 关 |
+
+当前任务以 **SYSTEM** 身份跑，通知栏 toast 到不了你正在用的那个账号，脚本会退到 `msg.exe` 弹一条会话消息。想要右下角那种现代 toast：用「只在用户登录时运行」再注册一份当前用户的任务，或手动跑一次 `.\po0fw.ps1 -Show` 看效果。改 `notify` 立刻生效，不用重新注册任务。
+
 ### 说明
 
 模板配了三个触发器：**每 10 分钟**、**开机后 1 分钟**、以及 **NetworkProfile 事件 10000（网络已连接）**——最后这个就是 Windows 版的 `network-changed`，带 10 秒延迟等接口稳定。任务以 **SYSTEM** 身份运行：不用存密码、不登录也跑、而且**不会每 10 分钟闪一个黑框**。
@@ -281,24 +299,30 @@ prepend-rules:
 
 这是唯一没法靠家里那台覆盖的场景——用移动数据时出口 IP 和家里完全无关。
 
-### 推荐：Termux + termux-job-scheduler
+### 推荐：Termux 上报 + MacroDroid 切网
 
-比自动化 App 靠谱的关键原因：**Termux 自带真正的 `curl`，TLS 完整，`pinned` 模式能用**，证书问题一次性解决；而且直接复用同一个 `po0fw.sh`，不用维护第二套逻辑。
+上报和通知交给 Termux 里的 `po0fw.sh`（真正的 `curl`，TLS 完整，跟 Shadowrocket 同一套「变了才弹」）。MacroDroid **只负责在切网时把脚本跑起来**——全程在 APP 里点，不用写代码。
 
-#### 第 0 步：装 Termux
+`termux-job-scheduler` 最短 15 分钟、也不能盯切网，所以只拿来当定时兜底，不作为主方案。
 
-要装**两个** APP：Termux 本体，以及 Termux:API（`termux-job-scheduler` 靠它干活）。**不要用 Play 商店版**，那个已停更多年，`pkg` 装不了东西。
+#### 第 0 步：装 APP
 
-> ⚠️ **两个 APP 必须来自同一个源**，F-Droid 和 GitHub 二选一，不能混。
+Termux 这边要装 **三个**，MacroDroid 一个。Termux 三个**必须来自同一个源**，**不要用 Play 商店版 Termux**（已停更多年，`pkg` 装不了东西）。
+
+> ⚠️ **Termux / Termux:API / Termux:Tasker 必须来自同一个源**，F-Droid 和 GitHub 二选一，不能混。
 >
-> 两边的构建**签名不同**，而 Termux 与 Termux:API 之间是靠 Android 广播通信、系统会校验签名的。混装的话广播被拒，**所有 `termux-*` 命令都会永远挂着、不报任何错**——这是本节最难查的一种失败，因为它零输出、零报错。
+> 两边的构建**签名不同**，而它们之间是靠 Android 广播通信、系统会校验签名的。混装的话广播被拒，**所有 `termux-*` 命令都会永远挂着、不报任何错**——这是本节最难查的一种失败，因为它零输出、零报错。
 >
 > 已经混装了的话：先把其中一个卸载（同包名不同签名，Android 会拒绝直接覆盖安装），再从正确的源重装。
 
-| 源 | Termux | Termux:API |
-|---|---|---|
-| F-Droid | <https://f-droid.org/packages/com.termux/> | <https://f-droid.org/packages/com.termux.api/> |
-| GitHub | <https://github.com/termux/termux-app/releases> | <https://github.com/termux/termux-api/releases> |
+| 源 | Termux | Termux:API | Termux:Tasker |
+|---|---|---|---|
+| F-Droid | <https://f-droid.org/packages/com.termux/> | <https://f-droid.org/packages/com.termux.api/> | <https://f-droid.org/packages/com.termux.tasker/> |
+| GitHub | <https://github.com/termux/termux-app/releases> | <https://github.com/termux/termux-api/releases> | <https://github.com/termux/termux-tasker/releases> |
+
+MacroDroid 从 [官网](https://www.macrodroid.com/) 或应用商店装即可，跟 Termux 不是一家，源不用对齐。
+
+**Termux:API** 给通知（`termux-notification`）。**Termux:Tasker** 是 MacroDroid 的插件，让 MacroDroid 能点选「跑哪个脚本」，不用自己填 Intent。
 
 GitHub 那边按设备架构选 APK（`pkg` 输出里的 `aarch64` 对应 `arm64-v8a`），只有通用 APK 时直接下它。
 
@@ -316,17 +340,32 @@ termux-battery-status
 
 ```sh
 pkg update -y && pkg upgrade -y && pkg install -y curl termux-api
-curl -fsSL -o ~/po0fw.sh https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.sh
+curl -fsSL -o ~/po0fw.sh        https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.sh
+curl -fsSL -o ~/po0fw.notify.sh https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.notify.sh
 chmod +x ~/po0fw.sh
 cat > ~/po0fw.conf <<'EOF'
 PO0FW_TOKENS="pgnfw_你的第一个|pgnfw_你的第二个"
 PO0FW_TLS="strict"
+PO0FW_NOTIFY="change"
 EOF
 chmod 600 ~/po0fw.conf
 ~/po0fw.sh -v
 ```
 
 手机是会移动的设备，**`PO0FW_TOKENS` 不要加 `@槽位`**——理由见上面的「槽位策略」。`chmod 600` 是因为这个文件里有 token。
+
+再开一下外部调用和插件目录（MacroDroid 第 3 步要用）：
+
+```sh
+mkdir -p ~/.termux ~/.termux/tasker
+grep -q '^allow-external-apps' ~/.termux/termux.properties 2>/dev/null \
+  || echo 'allow-external-apps = true' >> ~/.termux/termux.properties
+ln -sfn ~/po0fw.sh        ~/.termux/tasker/po0fw.sh
+ln -sfn ~/po0fw.conf      ~/.termux/tasker/po0fw.conf
+ln -sfn ~/po0fw.notify.sh ~/.termux/tasker/po0fw.notify.sh
+```
+
+改完 `termux.properties` 后，在 Termux 里执行一次 `termux-reload-settings`，或把 Termux 从后台划掉再开。
 
 > **`pkg upgrade` 这步不能省。** Termux 的 `pkg update` 只刷新软件源索引、**不升级已装的包**。只跑 `update` 就 `install curl` 会装上最新 curl 却留着旧 openssl，启动时报
 > `CANNOT LINK EXECUTABLE "curl": cannot locate symbol "SSL_set_quic_tls_transport_params"`，
@@ -343,27 +382,52 @@ chmod 600 ~/po0fw.conf
 | 家里宽带的段 | ❌ WiFi 没关干净 |
 | 代理服务器所在的段 | ❌ DIRECT 规则没生效，回第一节 |
 
-#### 第 3 步：交给系统调度
+#### 第 3 步：MacroDroid 里点（切网立刻跑）
 
-确认第 2 步无误后再跑（`--persisted` 开机自启，`--network any` 要求有网才跑）：
+下面按 MacroDroid 中文界面写，英文界面括号里是对应名字。点完不用写任何代码。
+
+1. 打开 **MacroDroid** → 右下角 **+** 新建宏，名字填 `po0 切网加白`。
+2. **触发器（Triggers）** → **+** → **连接（Connectivity）** → **网络类型变化（Network Type Change）**。
+   - 勾选 **WiFi** 和 **移动数据 / Cellular**。
+   - **不要**勾「无连接 / None」，否则飞行模式也会空跑。
+   - 保存触发器。
+3. **动作（Actions）** → **+** → **插件（Plugins）** → **Termux**（装了 Termux:Tasker 才会出现这一项）。
+   - **Executable / 可执行文件**：选 `po0fw.sh`（就是刚才链到 `~/.termux/tasker/` 的那个）。
+   - **Arguments / 参数**：留空。
+   - **Working Directory / 工作目录**：留空（脚本会在自己所在目录找 `po0fw.conf`）。
+   - **不要**勾「在终端里打开 / Open in terminal」。
+   - **Wait for result**：不勾也行。
+   - 保存动作。
+4. 点右上角保存宏，打开开关。
+
+第一次触发时，系统会问 **「要允许 MacroDroid 在 Termux 里跑命令吗」**——允许。Android 13+ 还要给 **Termux:API** 开通知权限（设置 → 应用 → Termux:API → 通知 → 允许），否则脚本跑了你看不到弹窗。
+
+**系统权限（两个 APP 都要）：**
+
+- 设置 → 应用 → **Termux** → 电池 → **无限制**
+- 设置 → 应用 → **MacroDroid** → 电池 → **无限制**，并允许自启动 / 后台运行（各家系统名字不一样，在「应用启动管理」里）
+
+切一次 WiFi ↔ 移动数据，通知栏应弹出 `po0 防火墙加白`。以后同一出口例行上报不会再刷。
+
+如果动作列表里没有 **Termux** 这一项：Termux:Tasker 没装，或跟 Termux 不是同一个源（签名不一致）。回到第 0 步对齐来源。
+
+#### 第 4 步：定时兜底（可选）
+
+MacroDroid 已经盯切网了。再加一个定时，避免某次 Intent 被系统吞掉。三种里选一个：
+
+**A. 还是在 MacroDroid 里点（推荐，不用再记命令）**
+
+同一个宏，再加一个触发器：**日期/时间（Date/Time）** → **间隔定时器（Regular Interval）** → **15 分钟**。一个宏两个触发器，切网和定时都跑同一条动作。
+
+**B. Termux JobScheduler**
 
 ```sh
 termux-job-scheduler --script ~/po0fw.sh --period-ms 900000 --persisted true --network any
 ```
 
-管理：
+周期最短 15 分钟是 Android 硬限制。管理：`termux-job-scheduler -p` 查看，`--cancel-all` 取消。
 
-```sh
-termux-job-scheduler -p            # 列出已注册的任务
-termux-job-scheduler --cancel-all  # 全部取消
-```
-
-两个注意点：
-
-- **周期最短 15 分钟**（`--period-ms 900000`）。这是 Android JobScheduler 的硬限制，不是脚本的问题，比 iOS 那边的 10 分钟略长，可以接受。
-- **必须给 Termux 关掉电池优化**（设置 → 应用 → Termux → 电池 → 无限制），否则会被系统掐掉。
-
-### 兜底：cron（不依赖 Termux:API）
+**C. cron（不依赖 Termux:API / Termux:Tasker）**
 
 Termux:API 实在搞不定时，用 cron 完全绕开它。代价是 Termux 得常驻、比 JobScheduler 费电，通知栏会有常驻提示。
 
@@ -393,13 +457,22 @@ cat ~/.po0fw/cron.err   # 应为空
 
 想立刻确认 cron 真在跑，把周期临时改成 `* * * * *`（每分钟），等两分钟看 `cron.err`，确认无误再改回 `*/15`。
 
-### 备选：MacroDroid / Tasker
+### 不要让 MacroDroid 自己发 HTTP
 
-优势是能做**网络类型变化的即时触发**，这一点 JobScheduler 做不到（它只能定周期）。劣势是 TLS 控制弱——裸 IP 的证书多半过不去，只能开「忽略 SSL 错误」，等价于 `insecure`，token 会暴露给中间人。
+MacroDroid 也能「动作 → HTTP 请求 → POST」直接打 `https://124.221.69.228/api/firewall/<token>/add`。**别这么干**：裸 IP 的证书它过不去，只能勾「忽略 SSL 错误」，等价于 `insecure`，token 在 URL 里，中间人能看到。通知也会每次切网都弹，对不上手机模块那套安静逻辑。
 
-配置：触发器「连接 → 网络类型变化」+「定时」，动作「HTTP 请求 → POST」到 `https://124.221.69.228/api/firewall/<token>/add`。
+切网用 MacroDroid，上报和通知留在 Termux 的 `po0fw.sh` 里。
 
-**想两者兼得**：Termux 管定时兜底（TLS 安全），MacroDroid 只负责在网络变化时通过 `RUN_COMMAND` intent 去调 Termux 里的 `po0fw.sh`。这样即时性和证书安全都有了，代价是配置复杂一些。
+### 系统通知（Android）
+
+默认打开，跟 Shadowrocket 一样：只在出口 IP 或加白状态变了时弹，标题 `po0 防火墙加白`。靠 `termux-notification`，所以要装 Termux:API 并给它通知权限。
+
+```sh
+PO0FW_NOTIFY="change"   # 默认，不写也行
+# PO0FW_NOTIFY="off"    # 关掉
+```
+
+已经装过、还没有 `~/po0fw.notify.sh` 的，补下这个文件即可，不用重做 MacroDroid。
 
 ### 别忘了覆写规则
 
@@ -446,3 +519,7 @@ Get-Content C:\ProgramData\po0fw\po0fw.log -Tail 20 -Wait
 | Android：`chmod: cannot access ~/po0fw.sh` / `No such file` | 上一条的连带——curl 坏了导致脚本没下下来。先修 curl 再重跑下载 |
 | Android：`termux-*` 命令**静默卡住、零输出零报错** | Termux 与 Termux:API 不同源（F-Droid ↔ GitHub 混装），签名不一致导致广播被拒。见「第 0 步」。注意 `pm list packages` 在 Termux 里查不到东西（Android 11+ 的包可见性限制），别拿它当判据——用 `termux-battery-status` 试 |
 | Android：Termux 任务不跑 | `termux-job-scheduler -p` 看任务在不在；确认已给 Termux 关掉电池优化 |
+| Android：切网没有通知 | 看 `~/.po0fw/po0fw.log` 或脚本旁边的 `po0fw.log`。没新行通常是出口没变（好事）。完全没跑：MacroDroid 宏开关、Termux:Tasker 权限、`allow-external-apps = true`、电池优化 |
+| Android：动作里没有 Termux 插件 | Termux:Tasker 没装，或跟 Termux 不同源。见「第 0 步」 |
+| Android：脚本跑了但没有通知栏 | 没装 `termux-api`，或没给 Termux:API 开通知权限。`command -v termux-notification` 应能找到 |
+| Windows：任务跑了但没看到通知 | 任务以 SYSTEM 跑，toast 到不了当前用户，应出现 `msg.exe` 会话消息。想要 Action Center toast，用当前用户再注册一份任务 |

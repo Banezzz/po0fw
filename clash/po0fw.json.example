@@ -6,6 +6,9 @@
   "tls": "strict",
   "pin": "",
 
+  "_comment_notify": "change | always | fail | off。默认 change，跟 Shadowrocket 一样：只在出口 IP 或加白状态变了时弹，例行 10 分钟保持安静。没配 token 也会弹。off 关掉。",
+  "notify": "change",
+
   "_comment_optional": "以下都可以不填，留空即用默认值。",
   "api": "https://124.221.69.228/api/firewall",
   "timeoutSec": 12,
