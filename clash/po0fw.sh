@@ -88,13 +88,13 @@ fi
 
 if [ -z "$TOKENS" ]; then
   log "❌ 未配置 token：在 $CONF 里设 PO0FW_TOKENS，或用环境变量传入"
-  po0fw_notify fail "未配置 token"
+  po0fw_notify error "未配置 token" "在 po0fw.conf 里设 PO0FW_TOKENS，或用环境变量传入"
   exit 2
 fi
 
 if ! command -v curl >/dev/null 2>&1; then
   log "❌ 找不到 curl"
-  po0fw_notify fail "找不到 curl"
+  po0fw_notify error "找不到 curl"
   exit 2
 fi
 
@@ -107,7 +107,7 @@ case "$TLS_MODE" in
   pinned)
     if [ -z "$PIN" ]; then
       log "❌ PO0FW_TLS=pinned 但没设 PO0FW_PIN，先跑 ./po0fw.sh --pin"
-      po0fw_notify fail "PO0FW_TLS=pinned 但没设 PO0FW_PIN"
+      po0fw_notify error "PO0FW_TLS=pinned 但没设 PO0FW_PIN" "先跑 ./po0fw.sh --pin"
       exit 2
     fi
     TLS_ARGS="-k --pinnedpubkey $PIN"
@@ -115,7 +115,7 @@ case "$TLS_MODE" in
   insecure) TLS_ARGS="-k" ;;
   *)
     log "❌ PO0FW_TLS 只能是 strict / pinned / insecure，当前是 $TLS_MODE"
-    po0fw_notify fail "PO0FW_TLS 无效：$TLS_MODE"
+    po0fw_notify error "PO0FW_TLS 无效" "只能是 strict / pinned / insecure，当前是 $TLS_MODE"
     exit 2
     ;;
 esac
@@ -233,7 +233,7 @@ done
 
 if [ "$total" = "0" ]; then
   log "❌ PO0FW_TOKENS 里没有合法的 pgnfw_ token"
-  po0fw_notify fail "没有合法的 pgnfw_ token"
+  po0fw_notify error "未配置 token" "PO0FW_TOKENS 里没有合法的 pgnfw_ token"
   exit 2
 fi
 
@@ -245,8 +245,8 @@ fi
   printf '%s%s\n' "$summary" "$lines"
 
 if [ "$ok_count" = "$total" ]; then
-  po0fw_notify ok "$summary$lines"
+  po0fw_notify ok "$summary" "$lines"
   exit 0
 fi
-po0fw_notify fail "$summary$lines"
+po0fw_notify fail "$summary" "$lines"
 exit 1

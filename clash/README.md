@@ -114,22 +114,25 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.po0fw.whitelist.plis
 
 Mac 睡眠期间不跑，唤醒后补一次。**但因为槽位是钉住的，睡眠期间白名单里那条也不会被淘汰**，所以不影响 Windows 用。
 
-### 系统通知（可选）
+### 系统通知
 
-默认不弹。想在每次上报成功 / 失败时出一条 macOS 通知，在 `po0fw.conf` 里加：
+macOS 默认打开，逻辑跟 Shadowrocket / Surge 模块一样：**只在出口 IP 或加白状态较上次变化时弹**（第一次成功、切网换了出口、加白失败，都会响）；例行 10 分钟上报保持安静。没配 token 也会弹。
+
+标题是 `po0 防火墙加白`，和手机上那条一致。
 
 ```sh
-PO0FW_NOTIFY="always"
+# 默认就是这个，不写也行
+PO0FW_NOTIFY="change"
 ```
 
 | 值 | 行为 |
 |---|---|
+| `change` | 出口 IP / 加白状态变了才弹（**默认**，等同手机） |
 | `always` | 每次执行都弹（成功 Glass / 失败 Basso） |
 | `fail` | 只失败才弹 |
-| `change` | 出口 IP 或加白状态变了才弹（失败也弹） |
-| `off` | 关（默认） |
+| `off` | 关 |
 
-`always` 会跟着 launchd 每 10 分钟响一次，嫌吵改 `fail` 或 `change`。通知走系统 `osascript`，改这一行立刻生效，不用重装 launchd。已经装过、还没有 `po0fw.notify.sh` 的，补下这个文件并更新 `po0fw.sh` 即可。
+嫌默认还是吵，设 `off`。通知走系统 `osascript`，改这一行立刻生效，不用重装 launchd。已经装过、还没有 `po0fw.notify.sh` 的，补下这个文件并更新 `po0fw.sh` 即可。
 
 ## Windows（任务计划程序）
 
