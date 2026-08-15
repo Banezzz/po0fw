@@ -26,6 +26,13 @@ PO0FW_TOKENS="pgnfw_第一台@0,pgnfw_第二台@1"
 PO0FW_TLS="strict"
 #PO0FW_PIN="sha256//替换成 --pin 输出的值"
 
+# ── 通知（仅 macOS；Linux / Android 无 osascript，设了也是空操作）──
+# always  每次执行都弹（成功 / 失败）。launchd 每 10 分钟会响一次。
+# fail    只失败才弹
+# change  出口 IP 或加白状态变了才弹（失败也弹）
+# off     关（默认，不写这一行也是 off）
+#PO0FW_NOTIFY="always"
+
 # ── 可选 ─────────────────────────────────────────────────────────────
 #PO0FW_API="https://124.221.69.228/api/firewall"
 #PO0FW_STATE_DIR="$HOME/.po0fw"     # 状态与日志目录

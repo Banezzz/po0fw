@@ -85,8 +85,9 @@ Mac 常年连在家里 WiFi 的话，也可以由它来当「家里 WAN 上报�
 ```sh
 # 1. 装脚本
 mkdir -p ~/.po0fw && cd ~/.po0fw
-curl -fsSL -o po0fw.sh   https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.sh
-curl -fsSL -o po0fw.conf https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.conf.example
+curl -fsSL -o po0fw.sh        https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.sh
+curl -fsSL -o po0fw.notify.sh https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.notify.sh
+curl -fsSL -o po0fw.conf      https://raw.githubusercontent.com/Banezzz/po0fw/main/clash/po0fw.conf.example
 chmod +x po0fw.sh
 vi po0fw.conf                      # PO0FW_TOKENS="pgnfw_A@0|pgnfw_B@0"
 ./po0fw.sh -v                      # 先手动跑通
@@ -112,6 +113,23 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.po0fw.whitelist.plis
 模板里配了三件事：`StartInterval 600`（每 10 分钟）、`RunAtLoad`（登录即跑一次）、`WatchPaths` 盯 `/etc/resolv.conf` 与 `SystemConfiguration`——切 WiFi、重新拨号、换 DHCP 租约时这些路径会被系统重写，等效于 Surge 的 `network-changed`。`ThrottleInterval 30` 防止网络抖动时连续触发。
 
 Mac 睡眠期间不跑，唤醒后补一次。**但因为槽位是钉住的，睡眠期间白名单里那条也不会被淘汰**，所以不影响 Windows 用。
+
+### 系统通知（可选）
+
+默认不弹。想在每次上报成功 / 失败时出一条 macOS 通知，在 `po0fw.conf` 里加：
+
+```sh
+PO0FW_NOTIFY="always"
+```
+
+| 值 | 行为 |
+|---|---|
+| `always` | 每次执行都弹（成功 Glass / 失败 Basso） |
+| `fail` | 只失败才弹 |
+| `change` | 出口 IP 或加白状态变了才弹（失败也弹） |
+| `off` | 关（默认） |
+
+`always` 会跟着 launchd 每 10 分钟响一次，嫌吵改 `fail` 或 `change`。通知走系统 `osascript`，改这一行立刻生效，不用重装 launchd。已经装过、还没有 `po0fw.notify.sh` 的，补下这个文件并更新 `po0fw.sh` 即可。
 
 ## Windows（任务计划程序）
 
