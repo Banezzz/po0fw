@@ -24,6 +24,10 @@ SELF_DIR=$(dirname "$0")
 CONF="${PO0FW_CONF:-$SELF_DIR/po0fw.conf}"
 # shellcheck source=/dev/null
 [ -f "$CONF" ] && . "$CONF"
+# 可选通知（macOS osascript）。同目录没有 po0fw.notify.sh 时是空操作。
+po0fw_notify() { :; }
+# shellcheck source=/dev/null
+[ -f "$SELF_DIR/po0fw.notify.sh" ] && . "$SELF_DIR/po0fw.notify.sh"
 
 API_BASE="${PO0FW_API:-https://124.221.69.228/api/firewall}"
 TOKENS="${PO0FW_TOKENS:-}"
@@ -84,11 +88,13 @@ fi
 
 if [ -z "$TOKENS" ]; then
   log "❌ 未配置 token：在 $CONF 里设 PO0FW_TOKENS，或用环境变量传入"
+  po0fw_notify fail "未配置 token"
   exit 2
 fi
 
 if ! command -v curl >/dev/null 2>&1; then
   log "❌ 找不到 curl"
+  po0fw_notify fail "找不到 curl"
   exit 2
 fi
 
@@ -101,6 +107,7 @@ case "$TLS_MODE" in
   pinned)
     if [ -z "$PIN" ]; then
       log "❌ PO0FW_TLS=pinned 但没设 PO0FW_PIN，先跑 ./po0fw.sh --pin"
+      po0fw_notify fail "PO0FW_TLS=pinned 但没设 PO0FW_PIN"
       exit 2
     fi
     TLS_ARGS="-k --pinnedpubkey $PIN"
@@ -108,6 +115,7 @@ case "$TLS_MODE" in
   insecure) TLS_ARGS="-k" ;;
   *)
     log "❌ PO0FW_TLS 只能是 strict / pinned / insecure，当前是 $TLS_MODE"
+    po0fw_notify fail "PO0FW_TLS 无效：$TLS_MODE"
     exit 2
     ;;
 esac
@@ -225,6 +233,7 @@ done
 
 if [ "$total" = "0" ]; then
   log "❌ PO0FW_TOKENS 里没有合法的 pgnfw_ token"
+  po0fw_notify fail "没有合法的 pgnfw_ token"
   exit 2
 fi
 
@@ -235,5 +244,9 @@ fi
 [ "$VERBOSE" = "1" ] && [ "$changed" = "0" ] && [ "$ok_count" = "$total" ] &&
   printf '%s%s\n' "$summary" "$lines"
 
-[ "$ok_count" = "$total" ] && exit 0
+if [ "$ok_count" = "$total" ]; then
+  po0fw_notify ok "$summary$lines"
+  exit 0
+fi
+po0fw_notify fail "$summary$lines"
 exit 1
