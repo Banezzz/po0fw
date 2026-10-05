@@ -31,6 +31,12 @@
  * - 全链路兜底 catch + watchdog，保证任何路径下都会调用 $done，
  *   绝不静默吊死到被客户端 timeout 杀掉（那样没有任何提示，最难排查）。
  *
+ * 可观测性：每次运行都用 console.log 留一行日志（哪个脚本 tag 触发的、结果、通知发没发
+ *   及原因），token 一律抹掉。没有面板的客户端上，默认通知只在状态变化时弹，例行运行
+ *   完全无声，没有这行日志就分不清"没跑"和"跑了但静默"。通知策略见 getNotifyMode()。
+ * Loon 注意：$httpClient 的 timeout 单位是毫秒（官方文档默认 5000），其余客户端是秒，
+ *   见 apiCall()。
+ *
  * token 来源（优先级从高到低）：
  * 1. argument: tokens=<pgnfw_xxx>[@槽位],<pgnfw_yyy>（Surge/Loon/Stash 模块参数）
  * 2. 持久化存储 key "po0fw_tokens"（Quantumult X 等不支持参数的客户端，
@@ -59,6 +65,7 @@ var WATCHDOG_MS = 50000; // 最后兜底，必须小于载体的 timeout
 var isQX = typeof $task !== "undefined";
 var isSurgeLike = typeof $httpClient !== "undefined"; // Surge/Stash/Shadowrocket/Loon
 var hasTimer = typeof setTimeout === "function";
+var isLoon = typeof $loon !== "undefined"; // 官方文档：$loon 是描述设备与 Loon 版本的字符串
 
 function storeRead(key) {
   try {
@@ -81,6 +88,89 @@ function notify(title, subtitle, body) {
     if (isQX) $notify(title, subtitle, body);
     else if (typeof $notification !== "undefined") $notification.post(title, subtitle, body);
   } catch (e) {}
+}
+
+// 日志可能被导出分享，而 token 就在请求 URL 的路径里，所以一律抹掉。
+function redact(s) {
+  return String(s).replace(/pgnfw_[0-9A-Za-z]+/g, "pgnfw_***");
+}
+
+function trace(msg) {
+  try {
+    if (typeof console !== "undefined" && console && typeof console.log === "function") {
+      console.log("[po0fw] " + redact(msg));
+    }
+  } catch (e) {}
+}
+
+function scriptName() {
+  try {
+    return typeof $script !== "undefined" && $script && $script.name ? String($script.name) : "?";
+  } catch (e) {
+    return "?";
+  }
+}
+
+function clientName() {
+  try {
+    return isQX ? "QuantumultX" : isLoon ? "Loon " + String($loon) : "surge-like";
+  } catch (e) {
+    return "?";
+  }
+}
+
+// 通知策略，与 Windows / Android / macOS 版的 notify 一致：
+//   change（默认）出口 IP 或加白状态变了才弹，配置错误也弹；
+//   always 每次都弹（调试用）；fail 只要没全部成功就弹；off 一律不弹。
+// 取值来自插件参数 notify（Loon 的对象形态，或 tokens=..&notify=.. 字符串形态）。
+// 没提供、写错都按 change，免得手误把通知整个关掉。
+function getNotifyMode() {
+  var raw = "";
+  try {
+    if (typeof $argument !== "undefined" && $argument !== null) {
+      if (typeof $argument === "object") {
+        raw = String($argument.notify || "");
+      } else if (typeof $argument === "string") {
+        var s = $argument;
+        if (/^["'].*["']$/.test(s)) s = s.slice(1, -1);
+        if (s.charAt(0) === "{") {
+          raw = String(JSON.parse(s).notify || "");
+        } else {
+          var pairs = s.split("&");
+          for (var i = 0; i < pairs.length; i++) {
+            var idx = pairs[i].indexOf("=");
+            if (idx > 0 && pairs[i].slice(0, idx) === "notify") {
+              raw = decodeURIComponent(pairs[i].slice(idx + 1));
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {}
+  raw = raw.trim().toLowerCase();
+  if (/^(1|true|yes|on|always)$/.test(raw)) return "always";
+  if (/^(0|false|no|none|off)$/.test(raw)) return "off";
+  if (raw === "fail") return "fail";
+  return "change";
+}
+
+function shouldNotify(status, changed) {
+  var mode = getNotifyMode();
+  if (mode === "always") return true;
+  if (mode === "fail") return status !== "ok";
+  if (mode === "change") return status === "error" || changed;
+  return false;
+}
+
+// 统一出口：决定弹不弹，并把决定本身写进日志。"为什么没弹"同样是需要留痕的信息。
+// status: ok（全部成功）| fail（有没成功的）| error（配置错误 / 超时 / 运行异常）
+function emit(status, changed, title, subtitle, body) {
+  var send = shouldNotify(status, changed);
+  trace(
+    "notify mode=" + getNotifyMode() + " status=" + status + " changed=" + changed +
+      " -> " + (send ? "sent" : "suppressed")
+  );
+  if (send) notify(title, subtitle, body);
 }
 
 function delay(ms) {
@@ -250,7 +340,9 @@ function apiCall(token, slot) {
     url: url,
     headers: { "Content-Type": "application/json" },
     body: "",
-    timeout: 10, // 认这个字段的客户端会先于 JS 层超时给出错误
+    // Loon 的 timeout 单位是毫秒（官方文档默认 5000），其余客户端是秒。
+    // 这里直接写 10，在 Loon 上就是 10 毫秒，连 TLS 握手都来不及，每次请求都会"超时"。
+    timeout: isLoon ? 10000 : 10, // 认这个字段的客户端会先于 JS 层（12s）超时给出错误
   }).then(function (r) {
     if (r.error) return { error: r.error };
     var data = null;
@@ -288,11 +380,12 @@ function apiCall(token, slot) {
 
 // 只对传输层失败重试：切网瞬间第一发常被隧道重建掐断，退避后往往就落在
 // 已经稳定的接口上。服务端给出的明确答复（含 403 槽位冲突）重试没有意义。
-function apiCallWithRetry(token, slot, attempt) {
+function apiCallWithRetry(token, slot, attempt, label) {
   return apiCall(token, slot).then(function (r) {
+    if (r.error) trace(label + " attempt " + attempt + "/" + MAX_ATTEMPTS + " failed: " + r.error);
     if (!r.error || r.conflict || attempt >= MAX_ATTEMPTS) return r;
     return delay(RETRY_BASE_MS * attempt).then(function () {
-      return apiCallWithRetry(token, slot, attempt + 1);
+      return apiCallWithRetry(token, slot, attempt + 1, label);
     });
   });
 }
@@ -304,7 +397,7 @@ function ensureWhitelisted(item, index) {
   var ctx = { kvState: kvState, kvHist: kvHist, slot: item.slot };
 
   // 服务端对重复 IP 幂等，直接请求 /add 即可，无需先查
-  return apiCallWithRetry(item.token, item.slot, 1).then(function (st) {
+  return apiCallWithRetry(item.token, item.slot, 1, "#" + (index + 1)).then(function (st) {
     if (st.applied) {
       var hist = readHistory(kvHist);
       var last = hist.length ? hist[hist.length - 1] : null;
@@ -344,7 +437,7 @@ function describe(index, ctx) {
   var st = ctx.st;
   var pin = ctx.slot !== null && ctx.slot !== undefined && ctx.slot !== "" ? " 📌" + ctx.slot : "";
   var head = "#" + (index + 1) + pin + " ";
-  if (st.error) return head + "❌ " + st.error;
+  if (st.error) return head + "❌ " + redact(st.error);
   if (st.enabled === false) return head + "⚠️ 防火墙未启用";
   var count = (st.whitelist && st.whitelist.length) || 0;
   if (!st.applied) return head + "❌ 加白未生效 " + count + "/" + st.limit;
@@ -388,10 +481,9 @@ function report(results) {
     "po0 加白 " + okCount + "/" + results.length + " · 出口 " + exitIp + (onCellular() ? " 📶" : "");
   var content = lines.join("\n");
 
-  // 仅在出口 IP 或加白状态较上次变化时通知，例行 POST 保持安静
-  if (changed) {
-    notify("po0 防火墙加白", title, content);
-  }
+  trace(title + " | " + lines.join(" ; ").replace(/\s+/g, " "));
+  // 默认（change）只在出口 IP 或加白状态较上次变化时通知，例行 POST 保持安静
+  emit(allOk ? "ok" : "fail", changed, "po0 防火墙加白", title, content);
   finish(title, content, allOk);
 }
 
@@ -412,8 +504,16 @@ var tokens = (getArgumentTokens() || storeRead(TOKENS_KEY) || INLINE_TOKENS || "
     return { token: s.slice(0, at), slot: isNaN(n) ? null : n };
   });
 
+trace(
+  "start script=" + scriptName() + " client=" + clientName() + " tokens=" + tokens.length +
+    " notify=" + getNotifyMode()
+);
+
 if (tokens.length === 0) {
-  notify(
+  trace("no valid pgnfw_ token found (argument / store key / INLINE_TOKENS)");
+  emit(
+    "error",
+    false,
     "po0 防火墙加白",
     "未配置 token",
     "模块参数 tokens / 存储 key po0fw_tokens / 脚本内 INLINE_TOKENS 三选一填入 pgnfw_ token"
@@ -424,11 +524,12 @@ if (tokens.length === 0) {
   // 给出可见结果，而不是让用户面对"什么都没发生"。
   if (hasTimer) {
     setTimeout(function () {
-      finish(
-        "po0 加白：整体超时",
-        "已等待 " + Math.round(WATCHDOG_MS / 1000) + "s 仍无结果，本轮放弃",
-        false
-      );
+      // 正常结束后计时器可能还在：已经收尾就别再冒出一条"整体超时"
+      if (finished) return;
+      var msg = "已等待 " + Math.round(WATCHDOG_MS / 1000) + "s 仍无结果，本轮放弃";
+      trace("watchdog fired: " + msg);
+      emit("error", false, "po0 防火墙加白", "整体超时", msg);
+      finish("po0 加白：整体超时", msg, false);
     }, WATCHDOG_MS);
   }
 
@@ -442,6 +543,9 @@ if (tokens.length === 0) {
     })
     .then(report)
     .catch(function (e) {
-      finish("po0 加白：运行异常", String((e && e.message) || e), false);
+      var msg = String((e && e.message) || e);
+      trace("run error: " + msg);
+      emit("error", false, "po0 防火墙加白", "运行异常", msg);
+      finish("po0 加白：运行异常", msg, false);
     });
 }

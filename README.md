@@ -28,6 +28,15 @@
 
 Surge/Loon/Stash/Shadowrocket/Quantumult X 共用 `scripts/po0-firewall-whitelist.js`，内置环境兼容层（`$httpClient`/`$task.fetch`、`$persistentStore`/`$prefs`、`$notification`/`$notify`）。不支持 `$network` 的客户端按非蜂窝处理；不支持面板的客户端仅少一个手动刷新入口。**Egern** 运行模型不同（`export default async function(ctx)`，无 `$` 全局），用独立的 `egern/po0-firewall-whitelist.js`（`ctx.http`/`ctx.storage`/`ctx.notify`/`ctx.env`/`ctx.device`），业务逻辑与共享脚本一致。
 
+### Loon 备注
+
+Loon 没有面板，而脚本平时是静默的（只在出口 IP 或加白状态变化时才通知），所以「没动静」并不等于「没执行」。每次运行都会写一行脚本日志，并且可以在插件设置里把「通知方式」改成 `always`（每次运行都弹通知）来确认它到底有没有自动执行；确认后改回 `change` 即可。
+
+- **自动触发规则**（出自 Loon 官方文档）：`cron` 按整点对齐（`*/10` 即每小时的 :00 / :10 / :20…），装完不会立刻跑；`network-changed` 要真有网络变化才触发；`generic` 脚本不会自动执行（本插件没有用到）。
+- **`network-changed` 可能被别的脚本挤掉**：Loon 3.5.1 (982) 及之前的文档写明，配置了多条 `network-changed` 脚本时只执行第一条；(983) 起的新语法文档则写明执行全部已启用的。如果你还装了别的带 `network-changed` 的插件，且排在本插件前面，本插件的网络变化触发可能不会执行（`cron` 不受影响）。这一条取决于你的 Loon 版本，没有在设备上验证。
+- **`$httpClient` 的 `timeout` 在 Loon 里单位是毫秒**，其余客户端是秒。脚本已按客户端分别处理；这是此前 Loon 上请求每次都失败的原因之一。
+- 通知能否最终展示，还取决于 iOS 的通知权限和 Loon 自己的通知设置。
+
 一键安装入口见教程页 <https://po0fw.rlyio.com/>。token 只保存在你自己的客户端配置里，本仓库不包含、不上传任何 token。
 
 > **给 Shadowrocket 改模块的人注意**：不要往 `.srmodule` 里加 `type=generic` 脚本或 `[Panel]` 段。两者都是 Surge 的概念，Shadowrocket 遇到不认识的脚本类型会让**整个 `[Script]` 段失效**，cron 与 event 一起不注册。故障表现是脚本完全不被派发——PacketTunnel 日志里一行 `script` 都没有，比脚本卡死更难排查。Shadowrocket 上想手动触发，切换一次网络即可（会触发 `network-changed`）。
