@@ -1,9 +1,0 @@
-#!name=po0 触发器诊断（临时）
-#!desc=只测 Loon 的 cron 与 network-changed 会不会自动触发，不碰防火墙 API，不含 token。每个触发会弹一条通知，测完请删除本插件。
-#!author=Banezzz
-#!homepage=https://github.com/Banezzz/po0fw
-
-[Script]
-cron "* * * * *" script-path=https://raw.githubusercontent.com/Banezzz/po0fw/claude/project-overview-ibljaa/loon/diag/trigger-diag.js, timeout=30, tag=diag-cron-every-minute
-cron "*/2 * * * *" script-path=https://raw.githubusercontent.com/Banezzz/po0fw/claude/project-overview-ibljaa/loon/diag/trigger-diag.js, timeout=30, tag=diag-cron-step-2
-network-changed script-path=https://raw.githubusercontent.com/Banezzz/po0fw/claude/project-overview-ibljaa/loon/diag/trigger-diag.js, timeout=30, tag=diag-network-changed
