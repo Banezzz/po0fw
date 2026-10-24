@@ -35,7 +35,8 @@
  *   及原因），token 一律抹掉。没有面板的客户端上，默认通知只在状态变化时弹，例行运行
  *   完全无声，没有这行日志就分不清"没跑"和"跑了但静默"。通知策略见 getNotifyMode()。
  * Loon 注意：$httpClient 的 timeout 单位是毫秒（官方文档默认 5000），其余客户端是秒，
- *   见 apiCall()。
+ *   见 apiCall()。Loon 上加白请求强制直连（node: DIRECT），重试也拉得更长，见下方
+ *   时序预算与 apiCall()。
  *
  * token 来源（优先级从高到低）：
  * 1. argument: tokens=<pgnfw_xxx>[@槽位],<pgnfw_yyy>（Surge/Loon/Stash 模块参数）
@@ -51,21 +52,28 @@ var STORE_PREFIX = "po0_fw_";
 var TOKENS_KEY = "po0fw_tokens";
 var HIST_WINDOW_MS = 24 * 3600 * 1000; // 📶 标记的记账窗口
 
-// 时序预算，需装进载体里的 timeout=60：
-// 稳定等待 2s + 3 次尝试 × 12s + 退避 2s、4s = 最坏 44s，watchdog 50s 收尾。
-// 调大任何一项时记得同步检查这个总和仍小于 WATCHDOG_MS。
-var SETTLE_DELAY_MS = 2000; // 事件触发后先让接口稳定，避免第一发就撞上隧道重建
-var REQ_TIMEOUT_MS = 12000; // 单次请求的 JS 层硬超时
-var MAX_ATTEMPTS = 3; // 含首次，传输失败最多试这么多次
-var RETRY_BASE_MS = 2000; // 第 n 次失败后等 n × 该值
-var WATCHDOG_MS = 50000; // 最后兜底，必须小于载体的 timeout
-
 /* ---------- 环境兼容层 ---------- */
 
 var isQX = typeof $task !== "undefined";
 var isSurgeLike = typeof $httpClient !== "undefined"; // Surge/Stash/Shadowrocket/Loon
 var hasTimer = typeof setTimeout === "function";
 var isLoon = typeof $loon !== "undefined"; // 官方文档：$loon 是描述设备与 Loon 版本的字符串
+
+// 时序预算，需装进载体里的 timeout：
+//   默认：稳定等待 2s + 3 次尝试 × 12s + 退避 2s、4s = 最坏 44s，watchdog 50s，载体 timeout=60。
+//   Loon：稳定等待 2s + 4 次尝试 × 12s + 退避 6s、30s、110s = 最坏 196s，watchdog 210s，插件 timeout=240。
+// 调大任何一项时记得同步检查这个总和仍小于 WATCHDOG_MS，WATCHDOG_MS 仍小于载体 timeout。
+//
+// Loon 拉长的原因：切网后头几秒网络常常还没通，这时请求是秒失败的，2s、4s 的退避会让
+// 三次机会在切网后约 8 秒内全部烧完。各 token 又是独立成败的，于是出现"有的节点通、
+// 有的不通"，要等下一次 cron（最长 10 分钟）才补上。拉长后，网络一直不通时的尝试点约为
+// 切网后 2s / 8s / 40s / 2.5min，与 Android 端 MacroDroid 的三轮节奏一致。
+// 其余客户端的载体 timeout 仍是 60，保持原样。
+var SETTLE_DELAY_MS = 2000; // 事件触发后先让接口稳定，避免第一发就撞上隧道重建
+var REQ_TIMEOUT_MS = 12000; // 单次请求的 JS 层硬超时
+var RETRY_WAITS_MS = isLoon ? [6000, 30000, 110000] : [2000, 4000]; // 第 n 次传输失败后等第 n 项
+var MAX_ATTEMPTS = RETRY_WAITS_MS.length + 1; // 含首次
+var WATCHDOG_MS = isLoon ? 210000 : 50000; // 最后兜底，必须小于载体的 timeout
 
 function storeRead(key) {
   try {
@@ -336,14 +344,20 @@ function apiCall(token, slot) {
   if (slot !== null && slot !== undefined && slot !== "") {
     url += "?slot=" + encodeURIComponent(slot);
   }
-  return httpRequest("POST", {
+  var opts = {
     url: url,
     headers: { "Content-Type": "application/json" },
     body: "",
     // Loon 的 timeout 单位是毫秒（官方文档默认 5000），其余客户端是秒。
     // 这里直接写 10，在 Loon 上就是 10 毫秒，连 TLS 握手都来不及，每次请求都会"超时"。
     timeout: isLoon ? 10000 : 10, // 认这个字段的客户端会先于 JS 层（12s）超时给出错误
-  }).then(function (r) {
+  };
+  // Loon 上显式走直连（官方 Script API：node 默认是「当前路由」，即照常匹配规则）。
+  // 插件里那条 IP-CIDR DIRECT 与主配置 / 订阅规则谁先匹配，文档没写；若先命中的规则
+  // 指向当前订阅里不存在的策略组，Loon 会退到全局第一个节点，请求就从代理出去：
+  // 服务端记下的是代理出口，还可能按先进先出把真实 IP 挤出白名单。
+  if (isLoon) opts.node = "DIRECT";
+  return httpRequest("POST", opts).then(function (r) {
     if (r.error) return { error: r.error };
     var data = null;
     try {
@@ -384,7 +398,7 @@ function apiCallWithRetry(token, slot, attempt, label) {
   return apiCall(token, slot).then(function (r) {
     if (r.error) trace(label + " attempt " + attempt + "/" + MAX_ATTEMPTS + " failed: " + r.error);
     if (!r.error || r.conflict || attempt >= MAX_ATTEMPTS) return r;
-    return delay(RETRY_BASE_MS * attempt).then(function () {
+    return delay(RETRY_WAITS_MS[attempt - 1]).then(function () {
       return apiCallWithRetry(token, slot, attempt + 1, label);
     });
   });
