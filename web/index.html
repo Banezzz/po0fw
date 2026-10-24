@@ -286,12 +286,12 @@ footer{
     <div class="client">
       <div class="head">
         <span class="badge emoji" aria-hidden="true">🤖</span>
-        <div><b>Android · FlClash</b><span>Termux 上报 + MacroDroid 切网</span></div>
+        <div><b>Android · FlClash</b><span>MacroDroid 直接 POST / Termux 上报</span></div>
       </div>
       <div class="install">
         <a class="btn brand" href="#clash-android">打开安卓指南</a>
       </div>
-      <p class="note">蜂窝出口家里那台覆盖不了。Termux 里跑同一份脚本（通知跟 Shadowrocket 一样：变了才弹）；MacroDroid 只负责切网时点一下，不用写代码。</p>
+      <p class="note">蜂窝出口家里那台覆盖不了。最省事：只装 MacroDroid，切网和每 10 分钟直接 POST，分三轮发。想要「变了才弹」的通知：Termux 跑同一份脚本，MacroDroid 只负责切网时喊它。</p>
     </div>
 
   </div>
@@ -354,8 +354,22 @@ $xml = (Get-Content C:\po0fw\po0fw-task.xml -Raw) -replace '__PO0FW_DIR__', 'C:\
 Register-ScheduledTask -TaskName 'po0fw-whitelist' -Xml $xml -Force</code></pre>
   <p>任务每 10 分钟 + 开机 + 网络已连接。以 SYSTEM 跑，不闪黑框；通知会走 <code>msg.exe</code> 会话消息（toast 到不了当前用户）。<code>notify</code> 默认 <code>change</code>。</p>
 
-  <h3 id="clash-android">Android（Termux 上报 + MacroDroid 切网）</h3>
-  <p>蜂窝出口家里那台覆盖不了，手机要自己报。上报和通知放在 Termux 的 <code>po0fw.sh</code> 里（TLS 完整，通知跟 Shadowrocket 一样：变了才弹）。<strong>MacroDroid 只负责切网时把脚本喊起来</strong>——全程在 APP 里点，不用写代码，也不要让它自己发 HTTP。</p>
+  <h3 id="clash-android">Android（FlClash）</h3>
+  <p>蜂窝出口家里那台覆盖不了，手机要自己报。两种做法二选一：<strong>方案一</strong>只装 MacroDroid，直接 POST，最省事但没有通知；<strong>方案二</strong> Termux 跑脚本上报（有「变了才弹」的通知、有日志），MacroDroid 只负责切网时把脚本喊起来。两种都必须先在 FlClash 覆写里加那条 <code>IP-CIDR,124.221.69.228/32,DIRECT,no-resolve</code>。</p>
+
+  <h3>方案一：只用 MacroDroid 直接 POST</h3>
+  <p><strong>触发器</strong>（实测配置的中文名，多放几个不怕，服务端对重复 IP 幂等）：IP地址更改、网络可用、启用 / 禁用 Wi-Fi、网络已连接 / 断开网络连接（选你家 WiFi 的 SSID），再加一个<strong>固定时间间隔 → 10 分钟</strong>兜底。</p>
+  <p><strong>动作</strong>：每个 token 一条「HTTP 请求」，方法 POST，URL 为 <code>https://124.221.69.228/api/firewall/&lt;token&gt;/add</code>。把这一组<strong>重复三轮</strong>：</p>
+  <ol class="steps">
+    <li>等待 8 秒 → 每个 token 一条 POST</li>
+    <li>等待 30 秒 → 每个 token 一条 POST</li>
+    <li>等待 2 分钟 → 每个 token 一条 POST</li>
+  </ol>
+  <div class="tip"><strong>为什么分三轮：</strong>触发器再多，也是同一秒触发、同一时刻发。切网后第 8 秒网络常常还没通，请求秒失败，而 MacroDroid 的 HTTP 请求不重试、不提示，整批静默失败。分三轮把机会摊到约 8 秒、40 秒、2.5 分钟。</div>
+  <p>SSL 选项<strong>保持默认</strong>，不要勾「忽略 SSL 错误」：这个 API 的证书能通过正常校验。MacroDroid 电池设「无限制」、允许自启动——这套只靠它一个 APP。验证：关 WiFi 等 3 分钟，po0 面板里应出现运营商蜂窝的网段。</p>
+
+  <h3>方案二：Termux 上报 + MacroDroid 切网</h3>
+  <p>上报和通知放在 Termux 的 <code>po0fw.sh</code> 里（自带重试，通知跟 Shadowrocket 一样：变了才弹）。<strong>MacroDroid 只负责切网时把脚本喊起来</strong>——全程在 APP 里点，不用写代码。</p>
 
   <h3>第 0 步：装 APP</h3>
   <p>Termux 三个必须<strong>同一个源</strong>（F-Droid 或 GitHub，别混、别用 Play 商店版 Termux）。MacroDroid 随便装。</p>
@@ -411,11 +425,11 @@ termux-reload-settings</code></pre>
         <li>Wait for result 不勾也行</li>
       </ul>
     </li>
+    <li>按方案一的节奏排成三轮：最前面加<strong>等待 8 秒</strong>，后面再加<strong>等待 30 秒 → 同一个 Termux 动作 → 等待 2 分钟 → 同一个 Termux 动作</strong>。脚本自己的重试只隔 2、4 秒，网络没通时同样几秒就用完；默认只在状态变化时弹通知，多跑几轮不会刷屏。</li>
     <li>保存宏，打开开关。第一次会问「允许 MacroDroid 在 Termux 里跑命令」——允许。</li>
-    <li>同一个宏再加一个触发器（定时兜底）：<strong>日期/时间</strong> → <strong>间隔定时器（Regular Interval）</strong> → <strong>15 分钟</strong>。</li>
+    <li>同一个宏再加一个触发器（定时兜底）：<strong>固定时间间隔（Regular Interval）</strong> → <strong>10 分钟</strong>。</li>
   </ol>
   <p>系统权限：<strong>Termux</strong> 和 <strong>MacroDroid</strong> 电池都设「无限制」；Android 13+ 给 <strong>Termux:API</strong> 开通知。切一次 WiFi ↔ 流量，通知栏应出现 <code>po0 防火墙加白</code>。同一出口再跑不会刷。</p>
-  <div class="tip warn"><strong>不要让 MacroDroid 自己 POST。</strong> 它过不了裸 IP 证书，只能勾「忽略 SSL」，token 在 URL 里等于明文。切网用 MacroDroid，上报和通知留在 Termux。</div>
 
   <p>更细的排错、Windows toast 限制、launchd 重载见仓库 <a href="https://github.com/Banezzz/po0fw/blob/main/clash/README.md">clash/README.md</a>。</p>
 </section>
@@ -439,13 +453,13 @@ termux-reload-settings</code></pre>
   <p><strong>Q: 走代理时会把代理服务器 IP 加白吗？</strong><br>
   模块客户端（Surge 等）自带加白 API（<code>124.221.69.228</code>）直连规则。Clash 系 TUN 开着时必须自己加那条 <code>IP-CIDR … DIRECT</code>，否则服务端看到的是代理 IP。</p>
   <p><strong>Q: 家宽换 IP 后多久生效？</strong><br>
-  网络切换事件是即时的；纯粹的公网 IP 变更最迟 10 分钟内被 cron / launchd / 任务计划捕捉。Android + MacroDroid 切网即时，定时兜底 15 分钟。</p>
+  网络切换事件是即时的；纯粹的公网 IP 变更最迟 10 分钟内被 cron / launchd / 任务计划捕捉。Android + MacroDroid 切网后分三轮发（约 8 秒 / 40 秒 / 2.5 分钟），定时兜底 10 分钟。</p>
   <p><strong>Q: 不同客户端功能有差异吗？</strong><br>
-  核心加白逻辑完全一致。差异：不支持 <code>$network</code> 的客户端没有 📶 蜂窝标记；Loon 无面板（可在脚本列表手动执行）；QX 无面板与脚本参数（token 走存储 key）；Clash 系用系统调度器，不是模块。</p>
+  核心加白逻辑完全一致。差异：不支持 <code>$network</code> 的客户端没有 📶 蜂窝标记；Loon 无面板（可在脚本列表手动执行），加白请求强制直连，切网后的重试拉长到约 2.5 分钟；QX 无面板与脚本参数（token 走存储 key）；Clash 系用系统调度器，不是模块。</p>
   <p><strong>Q: 支持几台 po0 机器？</strong><br>
   不限，tokens 逗号分割即可，面板按 #1 #2 … 分行显示。</p>
-  <p><strong>Q: 安卓为什么不用 MacroDroid 直接发 HTTP？</strong><br>
-  裸 IP 的 HTTPS 证书过不去，只能忽略 SSL，token 在 URL 里等于交给中间人。MacroDroid 只触发 Termux 里的脚本。</p>
+  <p><strong>Q: 安卓能只用 MacroDroid 直接发 HTTP 吗？</strong><br>
+  能，就是上面的方案一。这个 API 的证书能通过正常校验，SSL 选项保持默认即可，不用勾「忽略 SSL」（本页旧版说过证书过不去，那是错的）。代价是没有通知、token 存在宏里，以及请求要分三轮发。</p>
 </section>
 
 <footer>

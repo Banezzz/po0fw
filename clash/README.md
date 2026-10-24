@@ -297,11 +297,66 @@ prepend-rules:
 
 ## Android 蜂窝（FlClash）
 
-这是唯一没法靠家里那台覆盖的场景——用移动数据时出口 IP 和家里完全无关。
+这是唯一没法靠家里那台覆盖的场景——用移动数据时出口 IP 和家里完全无关。两种做法，二选一：
 
-### 推荐：Termux 上报 + MacroDroid 切网
+| | 方案一：只用 MacroDroid | 方案二：Termux + MacroDroid |
+|---|---|---|
+| 要装的 APP | MacroDroid 一个 | Termux、Termux:API、Termux:Tasker（三个必须同源）+ MacroDroid |
+| 谁发请求 | MacroDroid 的「HTTP 请求」动作 | Termux 里的 `po0fw.sh`（curl） |
+| 通知 | 没有。出问题看 MacroDroid 的系统日志和 po0 面板 | 跟 Shadowrocket 一样：出口或加白状态变了才弹，失败也弹 |
+| token 放在 | 宏里（导出、分享宏就等于分享 token） | `~/po0fw.conf`（`chmod 600`） |
 
-上报和通知交给 Termux 里的 `po0fw.sh`（真正的 `curl`，TLS 完整，跟 Shadowrocket 同一套「变了才弹」）。MacroDroid **只负责在切网时把脚本跑起来**——全程在 APP 里点，不用写代码。
+两种都**必须**先在 FlClash 里加那条 DIRECT 规则（见下方「别忘了覆写规则」），否则服务端看到的是代理出口。
+
+### 方案一：只用 MacroDroid 直接 POST（最省事，实测在用）
+
+#### 触发器
+
+下面是实测配置在中文界面里显示的名字。多放几个不怕：服务端对重复 IP 幂等，不占坑、不推进淘汰。
+
+- **IP地址更改**
+- **网络可用**
+- Wi-Fi：**启用 Wi-Fi**、**禁用 Wi-Fi**、**网络已连接**、**断开网络连接**（后两个选你家 WiFi 的 SSID）
+- **固定时间间隔 → 10 分钟**：兜底。蜂窝的公网出口可能在没有任何切网事件时变化，某次切网事件被系统吞掉也靠它补。
+
+#### 动作：分三轮发
+
+每个 token 一条「HTTP 请求」，方法 **POST**，URL：
+
+```
+https://124.221.69.228/api/firewall/<你的 token>/add
+```
+
+把这一组请求重复三轮，中间用「等待」隔开（N 个 token 就是 3N 条请求）：
+
+| # | 动作 |
+|---|---|
+| 1 | 等待 8 秒 |
+| 2 | HTTP 请求（POST）× N，每个 token 一条 |
+| 3 | 等待 30 秒 |
+| 4 | HTTP 请求（POST）× N |
+| 5 | 等待 2 分钟 |
+| 6 | HTTP 请求（POST）× N |
+
+**为什么要分三轮。** 触发器多只能保证「哪种网络事件都会触发」，但它们几乎在同一秒触发、等同样的 8 秒、同时发出，所有请求落在同一个时刻。出门那一下，切网后第 8 秒网络不一定通：WiFi 拖着没断干净、蜂窝刚连上、FlClash 还在把直连切到新网卡。这时请求是秒失败的，而 MacroDroid 的 HTTP 请求失败了不重试、也不提示，于是整批静默失败，要等下一次定时。分三轮把机会摊到切网后约 8 秒、40 秒、2.5 分钟，任何一轮打通就行。
+
+**要点：**
+
+- URL 结尾必须是 `/add`。列表里长 URL 会折行，点进去逐字核对。
+- SSL 相关选项**保持默认**，不要勾「忽略 SSL 错误」之类的选项。这个 API 的证书能通过正常校验：Windows 的 .NET、Termux 的 curl 用严格校验都通过，MacroDroid 用默认设置也能发成功。
+- 手机不要加 `?slot=`，理由见「槽位策略」。
+- MacroDroid 电池设「无限制」，允许自启动 / 后台运行，并在最近任务里锁住。这套方案只靠 MacroDroid 一个 APP，它被系统杀掉就什么都不会发。
+
+#### 验证
+
+保存宏，关掉 WiFi，等 3 分钟：
+
+1. MacroDroid 的系统日志：同一次触发应能看到动作分三批执行，大约在第 8 秒、40 秒、2 分 40 秒。
+2. po0 网页面板：白名单里应出现**运营商蜂窝**的网段。出现的是代理服务器的网段，说明 FlClash 的 DIRECT 规则没生效。
+
+### 方案二：Termux 上报 + MacroDroid 切网
+
+上报和通知交给 Termux 里的 `po0fw.sh`（真正的 `curl`，自带重试，跟 Shadowrocket 同一套「变了才弹」，每次运行写日志）。MacroDroid **只负责在切网时把脚本跑起来**——全程在 APP 里点，不用写代码。
 
 `termux-job-scheduler` 最短 15 分钟、也不能盯切网，所以只拿来当定时兜底，不作为主方案。
 
@@ -398,7 +453,8 @@ ln -sfn ~/po0fw.notify.sh ~/.termux/tasker/po0fw.notify.sh
    - **不要**勾「在终端里打开 / Open in terminal」。
    - **Wait for result**：不勾也行。
    - 保存动作。
-4. 点右上角保存宏，打开开关。
+4. 按方案一的节奏把这个动作排成三轮：最前面加 **等待 8 秒**，后面再加 **等待 30 秒 → 同一个 Termux 动作 → 等待 2 分钟 → 同一个 Termux 动作**。理由见方案一「为什么要分三轮」：`po0fw.sh` 自己的重试只隔 2 秒、4 秒，网络没通时同样会在几秒内用完。默认只在状态变化时弹通知，多跑几轮不会刷屏。
+5. 点右上角保存宏，打开开关。
 
 第一次触发时，系统会问 **「要允许 MacroDroid 在 Termux 里跑命令吗」**——允许。Android 13+ 还要给 **Termux:API** 开通知权限（设置 → 应用 → Termux:API → 通知 → 允许），否则脚本跑了你看不到弹窗。
 
@@ -417,7 +473,7 @@ MacroDroid 已经盯切网了。再加一个定时，避免某次 Intent 被系�
 
 **A. 还是在 MacroDroid 里点（推荐，不用再记命令）**
 
-同一个宏，再加一个触发器：**日期/时间（Date/Time）** → **间隔定时器（Regular Interval）** → **15 分钟**。一个宏两个触发器，切网和定时都跑同一条动作。
+同一个宏，再加一个触发器：**固定时间间隔（Regular Interval）** → **10 分钟**。切网和定时都跑同一串动作。
 
 **B. Termux JobScheduler**
 
@@ -457,15 +513,11 @@ cat ~/.po0fw/cron.err   # 应为空
 
 想立刻确认 cron 真在跑，把周期临时改成 `* * * * *`（每分钟），等两分钟看 `cron.err`，确认无误再改回 `*/15`。
 
-### 不要让 MacroDroid 自己发 HTTP
+> **更正**：本节旧版写过「不要让 MacroDroid 自己发 HTTP，裸 IP 的证书它过不去，只能勾忽略 SSL 错误」。这是错的：这个 API 的证书能通过正常校验，MacroDroid 用默认 SSL 设置就能发成功，见方案一。
 
-MacroDroid 也能「动作 → HTTP 请求 → POST」直接打 `https://124.221.69.228/api/firewall/<token>/add`。**别这么干**：裸 IP 的证书它过不去，只能勾「忽略 SSL 错误」，等价于 `insecure`，token 在 URL 里，中间人能看到。通知也会每次切网都弹，对不上手机模块那套安静逻辑。
+### 系统通知（Android 方案二）
 
-切网用 MacroDroid，上报和通知留在 Termux 的 `po0fw.sh` 里。
-
-### 系统通知（Android）
-
-默认打开，跟 Shadowrocket 一样：只在出口 IP 或加白状态变了时弹，标题 `po0 防火墙加白`。靠 `termux-notification`，所以要装 Termux:API 并给它通知权限。
+方案一没有通知，这一节只对 Termux 方案有效。默认打开，跟 Shadowrocket 一样：只在出口 IP 或加白状态变了时弹，标题 `po0 防火墙加白`。靠 `termux-notification`，所以要装 Termux:API 并给它通知权限。
 
 ```sh
 PO0FW_NOTIFY="change"   # 默认，不写也行
@@ -518,6 +570,7 @@ Get-Content C:\ProgramData\po0fw\po0fw.log -Tail 20 -Wait
 | Android：`CANNOT LINK EXECUTABLE "curl"` / `cannot locate symbol` | Termux 包版本不一致（只跑了 `pkg update` 没跑 `pkg upgrade`）。`pkg upgrade -y` 修复；仍不行再 `pkg install -y --reinstall openssl libngtcp2 curl` |
 | Android：`chmod: cannot access ~/po0fw.sh` / `No such file` | 上一条的连带——curl 坏了导致脚本没下下来。先修 curl 再重跑下载 |
 | Android：`termux-*` 命令**静默卡住、零输出零报错** | Termux 与 Termux:API 不同源（F-Droid ↔ GitHub 混装），签名不一致导致广播被拒。见「第 0 步」。注意 `pm list packages` 在 Termux 里查不到东西（Android 11+ 的包可见性限制），别拿它当判据——用 `termux-battery-status` 试 |
+| Android（方案一）：出门后有时没加白、过一阵才好 | 先确认动作分了三轮（见「为什么要分三轮」）、MacroDroid 电池是「无限制」。再出现时看 MacroDroid 系统日志：宏那一刻有没有触发，HTTP 动作有没有报错。po0 面板里有陌生网段，说明请求走了代理，查 FlClash 的 DIRECT 规则在当前用的订阅、配置下是否生效 |
 | Android：Termux 任务不跑 | `termux-job-scheduler -p` 看任务在不在；确认已给 Termux 关掉电池优化 |
 | Android：切网没有通知 | 看 `~/.po0fw/po0fw.log` 或脚本旁边的 `po0fw.log`。没新行通常是出口没变（好事）。完全没跑：MacroDroid 宏开关、Termux:Tasker 权限、`allow-external-apps = true`、电池优化 |
 | Android：动作里没有 Termux 插件 | Termux:Tasker 没装，或跟 Termux 不同源。见「第 0 步」 |
